@@ -1,0 +1,235 @@
+{
+  "projectType": "sdk-library",
+  "projectName": "Effect",
+  "projectDescription": "The missing standard library for TypeScript, for writing production-grade software.",
+  "theme": "palm",
+  "primaryColor": "#94cb04",
+  "lightColor": "#545454",
+  "darkColor": null,
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "installation",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/effect",
+              "concepts/services",
+              "concepts/layers",
+              "concepts/error-handling",
+              "concepts/resources"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/running-effects",
+              "guides/testing",
+              "guides/observability",
+              "guides/streaming",
+              "guides/concurrency"
+            ]
+          },
+          {
+            "group": "HTTP",
+            "pages": [
+              "http/client",
+              "http/server",
+              "http/api"
+            ]
+          },
+          {
+            "group": "Data & Persistence",
+            "pages": [
+              "data/sql",
+              "data/schema",
+              "data/caching"
+            ]
+          },
+          {
+            "group": "AI & LLM",
+            "pages": [
+              "ai/overview",
+              "ai/language-models",
+              "ai/tools-chat"
+            ]
+          },
+          {
+            "group": "Advanced",
+            "pages": [
+              "advanced/cli",
+              "advanced/cluster",
+              "advanced/batching",
+              "advanced/child-processes"
+            ]
+          },
+          {
+            "group": "Migration",
+            "pages": [
+              "migration/v3-to-v4",
+              "migration/services",
+              "migration/schema"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Core Modules",
+            "pages": [
+              "api/effect",
+              "api/layer",
+              "api/stream",
+              "api/schema",
+              "api/config"
+            ]
+          },
+          {
+            "group": "Data Structures",
+            "pages": [
+              "api/array",
+              "api/hashmap",
+              "api/hashset",
+              "api/chunk",
+              "api/option",
+              "api/either"
+            ]
+          },
+          {
+            "group": "Concurrency",
+            "pages": [
+              "api/fiber",
+              "api/queue",
+              "api/pubsub",
+              "api/deferred",
+              "api/semaphore"
+            ]
+          },
+          {
+            "group": "Time & Scheduling",
+            "pages": [
+              "api/clock",
+              "api/datetime",
+              "api/duration",
+              "api/schedule",
+              "api/cron"
+            ]
+          },
+          {
+            "group": "Platform",
+            "pages": [
+              "api/filesystem",
+              "api/http-client",
+              "api/http-server",
+              "api/worker"
+            ]
+          },
+          {
+            "group": "Unstable Modules",
+            "pages": [
+              "api/unstable/ai",
+              "api/unstable/cli",
+              "api/unstable/cluster",
+              "api/unstable/sql",
+              "api/unstable/process"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Packages",
+        "groups": [
+          {
+            "group": "Platform Packages",
+            "pages": [
+              "packages/platform-node",
+              "packages/platform-bun",
+              "packages/platform-browser"
+            ]
+          },
+          {
+            "group": "SQL Drivers",
+            "pages": [
+              "packages/sql-pg",
+              "packages/sql-mysql2",
+              "packages/sql-mssql",
+              "packages/sql-clickhouse",
+              "packages/sql-libsql"
+            ]
+          },
+          {
+            "group": "AI Providers",
+            "pages": [
+              "packages/ai-anthropic",
+              "packages/ai-openai",
+              "packages/ai-openrouter"
+            ]
+          },
+          {
+            "group": "Integrations",
+            "pages": [
+              "packages/opentelemetry",
+              "packages/vitest",
+              "packages/atom-react",
+              "packages/atom-solid",
+              "packages/atom-vue"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Type-safe functional programming with Effect, Layer, and Schema",
+    "Built-in error handling with typed error channels",
+    "Structured concurrency with Fibers and resource management",
+    "HTTP client and server with schema validation",
+    "SQL integrations for PostgreSQL, MySQL, SQL Server, and more",
+    "AI/LLM integrations for Anthropic, OpenAI, and OpenRouter",
+    "Observability with tracing, logging, and metrics",
+    "Streaming data processing with pull-based Streams",
+    "CLI application building utilities",
+    "Distributed computing with cluster modules",
+    "Reactive state management with Atom"
+  ],
+  "publicApiSurface": [
+    "Effect - Core effect type and operations",
+    "Layer - Dependency injection and service composition",
+    "Schema - Runtime type validation and transformation",
+    "Stream - Pull-based streaming data processing",
+    "Array - Immutable array operations",
+    "HashMap - Immutable hash map data structure",
+    "HashSet - Immutable hash set data structure",
+    "Option - Type-safe optional values",
+    "Either - Type-safe error handling",
+    "Queue - Asynchronous queue data structure",
+    "PubSub - Broadcasting messages to multiple consumers",
+    "Fiber - Lightweight concurrency primitive",
+    "Config - Type-safe configuration management",
+    "Cache - Memoization and caching utilities",
+    "DateTime - Date and time operations",
+    "Duration - Time duration utilities",
+    "Schedule - Retry and repeat policies",
+    "Cron - Cron expression parsing and scheduling",
+    "HttpClient - HTTP client for external APIs",
+    "HttpApi - Schema-first HTTP API building",
+    "Request/RequestResolver - Batching external requests",
+    "FileSystem - File system operations",
+    "unstable/ai - AI/LLM integration modules",
+    "unstable/cli - CLI application building",
+    "unstable/cluster - Distributed computing",
+    "unstable/sql - SQL query building and execution",
+    "unstable/process - Child process management"
+  ]
+}
