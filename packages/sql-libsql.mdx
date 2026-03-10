@@ -1,0 +1,316 @@
+---
+title: "@effect/sql-libsql"
+description: "libSQL driver for Effect SQL (Turso)"
+---
+
+## Overview
+
+`@effect/sql-libsql` provides a libSQL driver for Effect's SQL toolkit. libSQL is an open-source fork of SQLite developed by Turso, offering both local and remote database access with features like edge replication.
+
+## Installation
+
+<CodeGroup>
+
+```bash npm
+npm install @effect/sql-libsql
+```
+
+```bash pnpm
+pnpm add @effect/sql-libsql
+```
+
+```bash yarn
+yarn add @effect/sql-libsql
+```
+
+</CodeGroup>
+
+## Basic Usage
+
+### Local Database
+
+Create a local SQLite database:
+
+```typescript
+import { LibsqlClient } from "@effect/sql-libsql"
+import { Effect, Layer } from "effect"
+
+const SqlLive = LibsqlClient.layer({
+  url: "file:local.db"
+})
+```
+
+### In-Memory Database
+
+For testing or temporary data:
+
+```typescript
+const SqlLive = LibsqlClient.layer({
+  url: "file::memory:"
+})
+```
+
+### Remote Database (Turso)
+
+Connect to a Turso database:
+
+```typescript
+import { Redacted } from "effect"
+
+const SqlLive = LibsqlClient.layer({
+  url: "libsql://your-database.turso.io",
+  authToken: Redacted.make("your-auth-token")
+})
+```
+
+### Executing Queries
+
+```typescript
+import { Effect } from "effect"
+import { SqlClient } from "effect/unstable/sql"
+
+const program = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient
+
+  // Simple query
+  const users = yield* sql<{ id: number; name: string }>`
+    SELECT id, name FROM users WHERE active = ${true}
+  `
+
+  // Insert with helper
+  yield* sql`
+    INSERT INTO users ${sql.insert({ name: "Alice", email: "alice@example.com" })}
+  `
+
+  // Update with helper
+  yield* sql`
+    UPDATE users SET ${sql.update({ name: "Bob" })} WHERE id = ${1}
+  `
+})
+
+const runnable = program.pipe(Effect.provide(SqlLive))
+```
+
+## Configuration Options
+
+### Connection Options
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `url` | `string \| URL` | Database URL (file:, libsql:, http:, https:, ws:, wss:) |
+| `authToken` | `Redacted` | Authentication token for remote databases |
+| `encryptionKey` | `Redacted` | Encryption key for SQLite encryption extension |
+| `tls` | `boolean` | Enable/disable TLS for libsql: URLs (default: true) |
+
+### Integer Handling
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `intMode` | `"number" \| "bigint" \| "string"` | How to represent SQLite integers (default: "number") |
+
+### Concurrency
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `concurrency` | `number` | Max concurrent requests (default: 20, 0 for unlimited) |
+
+### Sync Options (Embedded Replicas)
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `syncUrl` | `string \| URL` | URL of remote server to sync with |
+| `syncInterval` | `number` | Sync interval in seconds |
+
+### Transform Options
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `transformResultNames` | `(str: string) => string` | Transform column names in results |
+| `transformQueryNames` | `(str: string) => string` | Transform identifiers in queries |
+
+### Advanced Options
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `spanAttributes` | `Record<string, unknown>` | Custom telemetry attributes |
+
+## Supported URL Formats
+
+libSQL supports multiple URL formats:
+
+| Protocol | Description | Example |
+|----------|-------------|---------|
+| `file:` | Local SQLite database | `file:local.db` |
+| `file::memory:` | In-memory database | `file::memory:` |
+| `libsql:` | Turso/libSQL protocol | `libsql://db.turso.io` |
+| `http:` / `https:` | HTTP connection | `https://db.turso.io` |
+| `ws:` / `wss:` | WebSocket connection | `wss://db.turso.io` |
+
+## Embedded Replicas
+
+Combine local and remote databases for edge computing:
+
+```typescript
+const SqlLive = LibsqlClient.layer({
+  url: "file:local-replica.db",
+  syncUrl: "libsql://your-database.turso.io",
+  authToken: Redacted.make("your-auth-token"),
+  syncInterval: 60 // Sync every 60 seconds
+})
+```
+
+This creates a local SQLite database that automatically syncs with a remote Turso database, providing low-latency reads and eventual consistency.
+
+## Integer Modes
+
+Control how SQLite integers are represented in JavaScript:
+
+```typescript
+// Use bigint for precise large integers
+const SqlLive = LibsqlClient.layer({
+  url: "file:local.db",
+  intMode: "bigint"
+})
+
+// Use string to avoid precision loss
+const SqlLive = LibsqlClient.layer({
+  url: "file:local.db",
+  intMode: "string"
+})
+```
+
+<Warning>
+  With `intMode: "number"`, integers larger than 2^53-1 will throw a `RangeError`.
+</Warning>
+
+## Encryption
+
+Use SQLite encryption extension:
+
+```typescript
+import { Redacted } from "effect"
+
+const SqlLive = LibsqlClient.layer({
+  url: "file:encrypted.db",
+  encryptionKey: Redacted.make("your-encryption-key")
+})
+```
+
+## Transactions
+
+Automatic transaction management:
+
+```typescript
+const sql = yield* SqlClient.SqlClient
+
+const result = yield* sql.withTransaction(
+  Effect.gen(function* () {
+    yield* sql`INSERT INTO accounts (balance) VALUES (${100})`
+    yield* sql`UPDATE accounts SET balance = balance - ${50} WHERE id = ${1}`
+    return yield* sql<{ balance: number }>`SELECT balance FROM accounts WHERE id = ${1}`
+  })
+)
+```
+
+Transactions automatically roll back on errors and commit on success.
+
+## Name Transformations
+
+Automatically convert between naming conventions:
+
+```typescript
+import { String } from "effect"
+
+const SqlLive = LibsqlClient.layer({
+  url: "file:local.db",
+  // Transform camelCase to snake_case for queries
+  transformQueryNames: String.camelToSnake,
+  // Transform snake_case to camelCase for results
+  transformResultNames: String.snakeToCamel
+})
+
+// Use camelCase in your code
+const users = yield* sql<{ userId: number; firstName: string }>`
+  SELECT userId, firstName FROM users
+`
+// Queries become: SELECT user_id, first_name FROM users
+```
+
+## Error Handling
+
+All SQL errors are wrapped in `SqlError`:
+
+```typescript
+import { SqlError } from "effect/unstable/sql"
+
+const program = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient
+  return yield* sql`SELECT * FROM users`
+}).pipe(
+  Effect.catchTag("SqlError", (error) =>
+    Effect.log(`Database error: ${error.message}`)
+  )
+)
+```
+
+## Using with Existing Client
+
+Wrap an existing libSQL client:
+
+```typescript
+import { createClient } from "@libsql/client"
+
+const client = createClient({
+  url: "libsql://your-database.turso.io",
+  authToken: "your-auth-token"
+})
+
+const SqlLive = LibsqlClient.layer({
+  liveClient: client
+})
+```
+
+## Type Safety
+
+The client is fully typed with Effect's type system:
+
+```typescript
+interface User {
+  id: number
+  name: string
+  email: string
+}
+
+const users = yield* sql<User>`SELECT * FROM users`
+// users: ReadonlyArray<User>
+```
+
+## Turso Platform Features
+
+When using Turso, you get additional features:
+
+- **Edge deployment**: Databases close to your users
+- **Automatic replication**: Multi-region data replication
+- **Point-in-time recovery**: Restore to any point in time
+- **Branching**: Create database branches like Git
+- **REST API**: Query via HTTP/REST
+
+Learn more at [turso.tech](https://turso.tech)
+
+## Migration from SQLite
+
+libSQL is compatible with SQLite. To migrate:
+
+1. Replace your SQLite driver import with `@effect/sql-libsql`
+2. Update the connection URL from `file:` format
+3. Optionally add `authToken` for remote databases
+
+```typescript
+// Before (SQLite)
+import { SqliteClient } from "@effect/sql-sqlite-node"
+const SqlLive = SqliteClient.layer({ filename: "local.db" })
+
+// After (libSQL)
+import { LibsqlClient } from "@effect/sql-libsql"
+const SqlLive = LibsqlClient.layer({ url: "file:local.db" })
+```

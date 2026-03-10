@@ -1,0 +1,797 @@
+---
+title: Schema Migration
+description: Complete guide to migrating Schema APIs from Effect v3 to v4
+---
+
+## Overview
+
+Schema has undergone significant restructuring in v4. This guide maps v3 Schema APIs to their v4 equivalents, organized by migration complexity.
+
+## Migration Types
+
+- **rename** — simple find-and-replace, safe to auto-apply
+- **variadic-to-array** — convert variadic arguments to array syntax
+- **restructure** — follows a clear pattern but needs structural changes
+- **manual** — requires case-by-case decisions
+- **removed** — no v4 equivalent
+
+## Quick Reference Table
+
+| v3 API | v4 API | Type |
+| --- | --- | --- |
+| `asSchema(schema)` | `revealCodec(schema)` | rename |
+| `encodedSchema(schema)` | `toEncoded(schema)` | rename |
+| `typeSchema(schema)` | `toType(schema)` | rename |
+| `compose(schemaB)` | `decodeTo(schemaB)` | rename |
+| `annotations(ann)` | `annotate(ann)` | rename |
+| `decodingFallback` annotation | `catchDecoding(...)` | rename |
+| `parseJson()` | `UnknownFromJsonString` | rename |
+| `parseJson(schema)` | `fromJsonString(schema)` | rename |
+| `pattern(regex)` | `check(isPattern(regex))` | rename |
+| `nonEmptyString` | `isNonEmpty` | rename |
+| `BigIntFromSelf` | `BigInt` | rename |
+| `SymbolFromSelf` | `Symbol` | rename |
+| `URLFromSelf` | `URL` | rename |
+| `decodeUnknown` | `decodeUnknownEffect` | rename |
+| `decode` | `decodeEffect` | rename |
+| `Literal(null)` | `Null` | restructure |
+| `Literal("a", "b")` | `Literals(["a", "b"])` | variadic-to-array |
+| `Union(A, B)` | `Union([A, B])` | variadic-to-array |
+| `Tuple(A, B)` | `Tuple([A, B])` | variadic-to-array |
+| `Record({ key, value })` | `Record(key, value)` | restructure |
+| `filter(predicate)` | `check(makeFilter(predicate))` | restructure |
+| `UUID` | `String.check(isUUID())` | restructure |
+| `pick("a")` | `mapFields(Struct.pick(["a"]))` | restructure |
+| `omit("a")` | `mapFields(Struct.omit(["a"]))` | restructure |
+| `partial` | `mapFields(Struct.map(Schema.optional))` | restructure |
+| `extend(structB)` | `mapFields(Struct.assign(fieldsB))` | restructure |
+| `validate*` | removed (use `decode*` + `toType`) | removed |
+
+## Simple Renames
+
+### Core API Renames
+
+**v3**
+
+```ts
+import { Schema } from "effect"
+
+const encoded = Schema.encodedSchema(mySchema)
+const type = Schema.typeSchema(mySchema)
+const revealed = Schema.asSchema(mySchema)
+const composed = mySchema.pipe(Schema.compose(otherSchema))
+const annotated = mySchema.pipe(Schema.annotations({ title: "My Schema" }))
+```
+
+**v4**
+
+```ts
+import { Schema } from "effect"
+
+const encoded = Schema.toEncoded(mySchema)
+const type = Schema.toType(mySchema)
+const revealed = Schema.revealCodec(mySchema)
+const composed = mySchema.pipe(Schema.decodeTo(otherSchema))
+const annotated = mySchema.pipe(Schema.annotate({ title: "My Schema" }))
+```
+
+### Decode/Encode Renames
+
+All decode and encode functions have been renamed with more explicit names:
+
+**v3**
+
+```ts
+import { Schema } from "effect"
+
+const result1 = Schema.decodeUnknown(schema)(input)
+const result2 = Schema.decode(schema)(input)
+const result3 = Schema.decodeUnknownEither(schema)(input)
+const result4 = Schema.decodeEither(schema)(input)
+```
+
+**v4**
+
+```ts
+import { Schema } from "effect"
+
+const result1 = Schema.decodeUnknownEffect(schema)(input)
+const result2 = Schema.decodeEffect(schema)(input)
+const result3 = Schema.decodeUnknownExit(schema)(input)
+const result4 = Schema.decodeExit(schema)(input)
+```
+
+<Note>
+  Note the suffix change: `Either` → `Exit` to align with Effect's terminology.
+</Note>
+
+### `*FromSelf` Suffix Removal
+
+All `*FromSelf` schemas have been renamed to drop the suffix:
+
+**v3**
+
+```ts
+import { Schema } from "effect"
+
+const schemas = [
+  Schema.BigIntFromSelf,
+  Schema.SymbolFromSelf,
+  Schema.URLFromSelf,
+  Schema.DateFromSelf,
+  Schema.OptionFromSelf(Schema.String),
+  Schema.EitherFromSelf({ left: Schema.String, right: Schema.Number })
+]
+```
+
+**v4**
+
+```ts
+import { Schema } from "effect"
+
+const schemas = [
+  Schema.BigInt,
+  Schema.Symbol,
+  Schema.URL,
+  Schema.Date,
+  Schema.Option(Schema.String),
+  Schema.Result({ left: Schema.String, right: Schema.Number })
+]
+```
+
+<Note>
+  Also note: `Either` has been renamed to `Result` to align with v4 terminology.
+</Note>
+
+## Variadic to Array
+
+Many constructors that accepted variadic arguments now require arrays:
+
+### Literals
+
+**v3**
+
+```ts
+import { Schema } from "effect"
+
+const schema = Schema.Literal("a", "b", "c")
+const picked = Schema.Literal("a", "b", "c").pipe(Schema.pickLiteral("a", "b"))
+```
+
+**v4**
+
+```ts
+import { Schema } from "effect"
+
+const schema = Schema.Literals(["a", "b", "c"])
+const picked = Schema.Literals(["a", "b", "c"]).pick(["a", "b"])
+```
+
+<Warning>
+  `Literal(null)` should be replaced with the built-in `Null` schema.
+</Warning>
+
+### Union and Tuple
+
+**v3**
+
+```ts
+import { Schema } from "effect"
+
+const union = Schema.Union(
+  Schema.String,
+  Schema.Number,
+  Schema.Boolean
+)
+
+const tuple = Schema.Tuple(
+  Schema.String,
+  Schema.Number
+)
+```
+
+**v4**
+
+```ts
+import { Schema } from "effect"
+
+const union = Schema.Union([
+  Schema.String,
+  Schema.Number,
+  Schema.Boolean
+])
+
+const tuple = Schema.Tuple([
+  Schema.String,
+  Schema.Number
+])
+```
+
+### TemplateLiteral
+
+**v3**
+
+```ts
+import { Schema } from "effect"
+
+const schema = Schema.TemplateLiteral(Schema.String, ".", Schema.String)
+const parser = Schema.TemplateLiteralParser(Schema.String, ".", Schema.String)
+```
+
+**v4**
+
+```ts
+import { Schema } from "effect"
+
+const schema = Schema.TemplateLiteral([Schema.String, ".", Schema.String])
+// Use the `parts` property instead of repeating the template parts
+const parser = Schema.TemplateLiteralParser(schema.parts)
+```
+
+## Restructured APIs
+
+### Record
+
+**v3**
+
+```ts
+import { Schema } from "effect"
+
+const schema = Schema.Record({ key: Schema.String, value: Schema.Number })
+```
+
+**v4**
+
+```ts
+import { Schema } from "effect"
+
+const schema = Schema.Record(Schema.String, Schema.Number)
+```
+
+### pick / omit
+
+<Warning>
+  Requires importing `Struct` from `effect`.
+</Warning>
+
+**v3**
+
+```ts
+import { Schema } from "effect"
+
+const picked = Schema.Struct({ a: Schema.String, b: Schema.Number }).pipe(
+  Schema.pick("a")
+)
+
+const omitted = Schema.Struct({ a: Schema.String, b: Schema.Number }).pipe(
+  Schema.omit("b")
+)
+```
+
+**v4**
+
+```ts
+import { Schema, Struct } from "effect"
+
+const picked = Schema.Struct({ a: Schema.String, b: Schema.Number })
+  .mapFields(Struct.pick(["a"]))
+
+const omitted = Schema.Struct({ a: Schema.String, b: Schema.Number })
+  .mapFields(Struct.omit(["b"]))
+```
+
+### partial / required
+
+**v3**
+
+```ts
+import { Schema } from "effect"
+
+const struct = Schema.Struct({ a: Schema.String, b: Schema.Number })
+
+const partial = struct.pipe(Schema.partial)
+const exact = struct.pipe(Schema.partialWith({ exact: true }))
+const required = partial.pipe(Schema.required)
+```
+
+**v4**
+
+```ts
+import { Schema, Struct } from "effect"
+
+const struct = Schema.Struct({ a: Schema.String, b: Schema.Number })
+
+// Allows undefined
+const partial = struct.mapFields(Struct.map(Schema.optional))
+
+// Exact optional (no undefined)
+const exact = struct.mapFields(Struct.map(Schema.optionalKey))
+
+// Make all fields required
+const required = partial.mapFields(Struct.map(Schema.requiredKey))
+
+// Make subset of fields partial
+const mixedPartial = struct.mapFields(
+  Struct.mapPick(["a"], Schema.optional)
+)
+```
+
+### extend
+
+**v3**
+
+```ts
+import { Schema } from "effect"
+
+const extended = Schema.Struct({
+  a: Schema.String,
+  b: Schema.Number
+}).pipe(
+  Schema.extend(Schema.Struct({ c: Schema.Boolean }))
+)
+```
+
+**v4**
+
+```ts
+import { Schema, Struct } from "effect"
+
+// Option 1: mapFields + Struct.assign
+const extended = Schema.Struct({
+  a: Schema.String,
+  b: Schema.Number
+}).mapFields(Struct.assign({ c: Schema.Boolean }))
+
+// Option 2: fieldsAssign (more succinct)
+const extended2 = Schema.Struct({
+  a: Schema.String,
+  b: Schema.Number
+}).pipe(Schema.fieldsAssign({ c: Schema.Boolean }))
+```
+
+### filter
+
+**v3**
+
+```ts
+import { Schema } from "effect"
+
+// Inline filter
+const nonEmpty = Schema.String.pipe(
+  Schema.filter((s) => s.length > 0)
+)
+
+// Refinement
+const some = Schema.Option(Schema.String).pipe(
+  Schema.filter(Option.isSome)
+)
+```
+
+**v4**
+
+```ts
+import { Option, Schema } from "effect"
+
+// Inline filter
+const nonEmpty = Schema.String.check(
+  Schema.makeFilter((s) => s.length > 0)
+)
+
+// Refinement
+const some = Schema.Option(Schema.String).pipe(
+  Schema.refine(Option.isSome)
+)
+```
+
+### Filter Predicates
+
+All filter predicates have been renamed with `is` prefix and now use `check(...)`:
+
+**v3**
+
+```ts
+import { Schema } from "effect"
+
+const schemas = [
+  Schema.String.pipe(Schema.pattern(/^\d+$/)),
+  Schema.String.pipe(Schema.nonEmptyString),
+  Schema.String.pipe(Schema.UUID),
+  Schema.String.pipe(Schema.ULID),
+  Schema.Number.pipe(Schema.greaterThan(0)),
+  Schema.Number.pipe(Schema.int),
+  Schema.Number.pipe(Schema.positive)
+]
+```
+
+**v4**
+
+```ts
+import { Schema } from "effect"
+
+const schemas = [
+  Schema.String.check(Schema.isPattern(/^\d+$/)),
+  Schema.String.check(Schema.isNonEmpty()),
+  Schema.String.check(Schema.isUUID()),
+  Schema.String.check(Schema.isULID()),
+  Schema.Number.check(Schema.isGreaterThan(0)),
+  Schema.Number.check(Schema.isInt())
+  // Note: positive/negative/nonNegative/nonPositive removed in v4
+]
+```
+
+### transform / transformOrFail
+
+**v3**
+
+```ts
+import { Schema } from "effect"
+
+const BoolFromString = Schema.transform(
+  Schema.Literal("on", "off"),
+  Schema.Boolean,
+  {
+    strict: true,
+    decode: (literal) => literal === "on",
+    encode: (bool) => (bool ? "on" : "off")
+  }
+)
+```
+
+**v4**
+
+```ts
+import { Schema, SchemaTransformation } from "effect"
+
+const BoolFromString = Schema.Literals(["on", "off"]).pipe(
+  Schema.decodeTo(
+    Schema.Boolean,
+    SchemaTransformation.transform({
+      decode: (literal) => literal === "on",
+      encode: (bool) => (bool ? "on" : "off")
+    })
+  )
+)
+```
+
+<Note>
+  Requires importing `SchemaTransformation` from `effect`.
+</Note>
+
+**transformOrFail** follows a similar pattern:
+
+**v3**
+
+```ts
+import { ParseResult, Schema } from "effect"
+
+const NumberFromString = Schema.transformOrFail(
+  Schema.String,
+  Schema.Number,
+  {
+    strict: true,
+    decode: (input, _, ast) => {
+      const parsed = parseFloat(input)
+      if (isNaN(parsed)) {
+        return ParseResult.fail(
+          new ParseResult.Type(ast, input, "Failed to convert")
+        )
+      }
+      return ParseResult.succeed(parsed)
+    },
+    encode: (input) => ParseResult.succeed(input.toString())
+  }
+)
+```
+
+**v4**
+
+```ts
+import { Effect, Number, Schema, SchemaGetter, SchemaIssue } from "effect"
+
+const NumberFromString = Schema.String.pipe(
+  Schema.decodeTo(Schema.Number, {
+    decode: SchemaGetter.transformOrFail((s) => {
+      const n = Number.parse(s)
+      if (n === undefined) {
+        return Effect.fail(new SchemaIssue.InvalidValue(Option.some(s)))
+      }
+      return Effect.succeed(n)
+    }),
+    encode: SchemaGetter.String()
+  })
+)
+```
+
+### decodingFallback
+
+**v3**
+
+```ts
+import { Effect, Schema } from "effect"
+
+const schema = Schema.String.annotations({
+  decodingFallback: () => Effect.succeed("a")
+})
+```
+
+**v4**
+
+```ts
+import { Effect, Schema } from "effect"
+
+const schema = Schema.String.pipe(
+  Schema.catchDecoding(() => Effect.succeedSome("a"))
+)
+```
+
+## Manual Migrations
+
+### optionalWith
+
+The `optionalWith` API has been split into multiple explicit patterns based on the options used:
+
+| v3 options | v4 pattern |
+| --- | --- |
+| `{ exact: true }` | `optionalKey(schema)` |
+| `{ default }` | `optional(schema)` + `decodeTo` + `withDefault(...)` |
+| `{ exact: true, default }` | `optionalKey(schema)` + `decodeTo` + `withDefault(...)` |
+| `{ nullable: true }` | `optional(NullOr(schema))` + filter null |
+| `{ nullable: true, default }` | `optional(NullOr(schema))` + filter null + `orElseSome` |
+
+**Example: `{ exact: true }` (simplest case)**
+
+**v3**
+
+```ts
+import { Schema } from "effect"
+
+const schema = Schema.Struct({
+  a: Schema.optionalWith(Schema.NumberFromString, { exact: true })
+})
+```
+
+**v4**
+
+```ts
+import { Schema } from "effect"
+
+const schema = Schema.Struct({
+  a: Schema.optionalKey(Schema.NumberFromString)
+})
+```
+
+**Example: `{ nullable: true, exact: true, default }` (most complex case)**
+
+**v3**
+
+```ts
+import { Schema } from "effect"
+
+const schema = Schema.Struct({
+  a: Schema.optionalWith(Schema.NumberFromString, {
+    nullable: true,
+    default: () => -1,
+    exact: true
+  })
+})
+```
+
+**v4**
+
+```ts
+import { Option, Predicate, Schema, SchemaGetter } from "effect"
+
+const schema = Schema.Struct({
+  a: Schema.optionalKey(Schema.NullOr(Schema.NumberFromString)).pipe(
+    Schema.decodeTo(Schema.toType(Schema.NumberFromString), {
+      decode: SchemaGetter.transformOptional((o) =>
+        o.pipe(
+          Option.filter(Predicate.isNotNull),
+          Option.orElseSome(() => -1)
+        )
+      ),
+      encode: SchemaGetter.required()
+    })
+  )
+})
+```
+
+### Optional Field Transformations
+
+`optionalToOptional`, `optionalToRequired`, and `requiredToOptional` are replaced by `Schema.decodeTo` + `SchemaGetter.transformOptional`.
+
+**Example: optionalToRequired (setting default for missing field)**
+
+**v3**
+
+```ts
+import { Option, Schema } from "effect"
+
+const schema = Schema.Struct({
+  a: Schema.optionalToRequired(Schema.String, Schema.NullOr(Schema.String), {
+    decode: Option.getOrElse(() => null),
+    encode: Option.liftPredicate((value) => value !== null)
+  })
+})
+```
+
+**v4**
+
+```ts
+import { Option, Schema, SchemaGetter } from "effect"
+
+const schema = Schema.Struct({
+  a: Schema.optionalKey(Schema.String).pipe(
+    Schema.decodeTo(Schema.NullOr(Schema.String), {
+      decode: SchemaGetter.transformOptional(
+        Option.orElseSome(() => null)
+      ),
+      encode: SchemaGetter.transformOptional(
+        Option.filter((value) => value !== null)
+      )
+    })
+  )
+})
+```
+
+### filterEffect
+
+**v3**
+
+```ts
+import { Effect, Schema } from "effect"
+
+async function validateUsername(username: string) {
+  return Promise.resolve(username === "gcanti")
+}
+
+const ValidUsername = Schema.String.pipe(
+  Schema.filterEffect((username) =>
+    Effect.promise(() =>
+      validateUsername(username).then((valid) => valid || "Invalid username")
+    )
+  )
+)
+```
+
+**v4**
+
+```ts
+import { Effect, Schema, SchemaGetter } from "effect"
+
+async function validateUsername(username: string) {
+  return Promise.resolve(username === "gcanti")
+}
+
+const ValidUsername = Schema.String.pipe(
+  Schema.decode({
+    decode: SchemaGetter.checkEffect((username) =>
+      Effect.promise(() =>
+        validateUsername(username).then((valid) => valid || "Invalid username")
+      )
+    ),
+    encode: SchemaGetter.passthrough()
+  })
+)
+```
+
+### rename (experimental)
+
+**v3**
+
+```ts
+import { Schema } from "effect"
+
+const schema = Schema.Struct({
+  a: Schema.String,
+  b: Schema.Number
+}).pipe(Schema.rename({ a: "c" }))
+```
+
+**v4**
+
+```ts
+import { Schema } from "effect"
+
+// experimental API
+const schema = Schema.Struct({
+  a: Schema.String,
+  b: Schema.Number
+}).pipe(Schema.encodeKeys({ a: "c" }))
+```
+
+## Removed APIs
+
+### validate* APIs
+
+The `validate`, `validateEither`, `validatePromise`, `validateSync`, and `validateOption` APIs have been removed. Use `Schema.decode*` + `Schema.toType` instead.
+
+**v3**
+
+```ts
+import { Schema } from "effect"
+
+const validate = Schema.validateSync(Schema.String)
+const result = validate(input)
+```
+
+**v4**
+
+```ts
+import { Schema } from "effect"
+
+const validate = Schema.decodeSync(Schema.toType(Schema.String))
+const result = validate(input)
+```
+
+### Other Removed APIs
+
+- `keyof` — removed without direct replacement
+- `ArrayEnsure` — removed
+- `NonEmptyArrayEnsure` — removed
+- `withDefaults` — removed
+- `fromKey` — removed
+- `forkAll` — removed
+- `forkWithErrorHandler` — removed
+
+## String Transformation Helpers
+
+### Capitalize / Lowercase / Uppercase
+
+**v3**
+
+```ts
+import { Schema } from "effect"
+
+const schema = Schema.Capitalize
+```
+
+**v4**
+
+```ts
+import { Schema, SchemaTransformation } from "effect"
+
+const schema = Schema.String.pipe(
+  Schema.decodeTo(
+    Schema.String.check(Schema.isCapitalized()),
+    SchemaTransformation.capitalize()
+  )
+)
+```
+
+### NonEmptyTrimmedString
+
+**v3**
+
+```ts
+import { Schema } from "effect"
+
+const schema = Schema.NonEmptyTrimmedString
+```
+
+**v4**
+
+```ts
+import { Schema } from "effect"
+
+const schema = Schema.Trimmed.check(Schema.isNonEmpty())
+```
+
+## Migration Checklist
+
+- [ ] Rename `Union(A, B)` → `Union([A, B])` (variadic to array)
+- [ ] Rename `Tuple(A, B)` → `Tuple([A, B])` (variadic to array)
+- [ ] Rename `Literal("a", "b")` → `Literals(["a", "b"])`
+- [ ] Rename `Record({ key, value })` → `Record(key, value)`
+- [ ] Rename all `*FromSelf` schemas (drop suffix)
+- [ ] Rename `decodeUnknown` → `decodeUnknownEffect`
+- [ ] Rename `compose` → `decodeTo`
+- [ ] Update `pick` / `omit` to use `mapFields` + `Struct`
+- [ ] Update `partial` / `required` to use `mapFields` + `Struct.map`
+- [ ] Update `extend` to use `fieldsAssign` or `mapFields` + `Struct.assign`
+- [ ] Update `filter` to use `check(makeFilter(...))` or `refine(...)`
+- [ ] Update filter predicates to use `is*` prefix and `check(...)`
+- [ ] Update `transform` to use `decodeTo` + `SchemaTransformation.transform`
+- [ ] Update `optionalWith` based on decision tree
+- [ ] Replace `validate*` with `decode*` + `toType`
+- [ ] Replace `decodingFallback` with `catchDecoding`

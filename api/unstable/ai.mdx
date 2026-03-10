@@ -1,0 +1,311 @@
+---
+title: "AI"
+description: "Unstable AI module for building LLM-powered applications with Effect"
+---
+
+<Warning>
+  The AI module is marked as **unstable**, meaning its APIs may change in minor version releases. Use caution when upgrading Effect versions.
+</Warning>
+
+## Overview
+
+The `effect/unstable/ai` module provides comprehensive tools for building AI-powered applications with large language models (LLMs). It offers provider-agnostic interfaces for text generation, structured output, tool calling, and conversation management.
+
+## Installation
+
+```bash
+npm install effect
+```
+
+## Key Modules
+
+### LanguageModel
+
+The core interface for interacting with large language models, supporting both streaming and non-streaming text generation.
+
+```typescript
+import { Effect } from "effect"
+import { LanguageModel } from "effect/unstable/ai"
+
+// Basic text generation
+const program = Effect.gen(function*() {
+  const response = yield* LanguageModel.generateText({
+    prompt: "Explain quantum computing in simple terms"
+  })
+  
+  console.log(response.text)
+  return response
+})
+```
+
+**Key Functions:**
+- `generateText(options)` - Generate text from a prompt
+- `streamText(options)` - Stream text generation in real-time
+- `generateObject(options)` - Generate structured output conforming to a schema
+
+### Chat
+
+Stateful conversation interface that maintains chat history and supports multi-turn interactions.
+
+```typescript
+import { Effect, Stream } from "effect"
+import { Chat } from "effect/unstable/ai"
+
+// Create a chat session
+const program = Effect.gen(function*() {
+  const chat = yield* Chat.empty
+  
+  // Send first message
+  const response1 = yield* chat.generateText({
+    prompt: "What is Effect?"
+  })
+  
+  // Chat maintains history for follow-up
+  const response2 = yield* chat.generateText({
+    prompt: "Can you give me an example?"
+  })
+  
+  return { response1, response2 }
+})
+```
+
+### Tool & Toolkit
+
+Define and manage tools that language models can call to extend their capabilities.
+
+```typescript
+import { Schema } from "effect"
+import { Tool, Toolkit } from "effect/unstable/ai"
+
+// Define a calculator tool
+const Calculator = Tool.make("Calculator", {
+  description: "Performs basic arithmetic operations",
+  parameters: Schema.Struct({
+    operation: Schema.Literals("add", "subtract", "multiply", "divide"),
+    a: Schema.Number,
+    b: Schema.Number
+  }),
+  success: Schema.Number
+})
+
+// Create a toolkit with multiple tools
+const GetWeather = Tool.make("GetWeather", {
+  description: "Get weather for a location",
+  parameters: Schema.Struct({ location: Schema.String }),
+  success: Schema.Struct({
+    temperature: Schema.Number,
+    condition: Schema.String
+  })
+})
+
+const MyToolkit = Toolkit.make(Calculator, GetWeather)
+
+// Implement tool handlers
+const MyToolkitLayer = MyToolkit.toLayer({
+  Calculator: ({ operation, a, b }) => {
+    switch (operation) {
+      case "add": return Effect.succeed(a + b)
+      case "subtract": return Effect.succeed(a - b)
+      case "multiply": return Effect.succeed(a * b)
+      case "divide": return Effect.succeed(a / b)
+    }
+  },
+  GetWeather: ({ location }) =>
+    Effect.succeed({
+      temperature: 72,
+      condition: "sunny"
+    })
+})
+```
+
+### Prompt & Response
+
+Data structures for constructing prompts and handling model responses.
+
+```typescript
+import { Prompt, Response } from "effect/unstable/ai"
+
+// Create structured conversation
+const conversation = Prompt.make([
+  {
+    role: "system",
+    content: "You are a helpful coding assistant."
+  },
+  {
+    role: "user",
+    content: [{
+      type: "text",
+      text: "How do I create an Effect?"
+    }]
+  }
+])
+
+// Concatenate prompts
+const systemPrompt = Prompt.make([{
+  role: "system",
+  content: "You are a coding assistant."
+}])
+
+const userPrompt = Prompt.make("Help me write a function")
+const combined = Prompt.concat(systemPrompt, userPrompt)
+```
+
+### AiError
+
+Comprehensive error handling for AI operations with semantic error categories.
+
+```typescript
+import { Effect, Match } from "effect"
+import type { AiError } from "effect/unstable/ai"
+
+// Handle errors using Match on the reason
+const handleAiError = Match.type<AiError.AiError>().pipe(
+  Match.when(
+    { reason: { _tag: "RateLimitError" } },
+    (err) => Effect.logWarning(`Rate limited, retry after ${err.retryAfter}`)
+  ),
+  Match.when(
+    { reason: { _tag: "AuthenticationError" } },
+    (err) => Effect.logError(`Auth failed: ${err.reason.kind}`)
+  ),
+  Match.when(
+    { reason: { isRetryable: true } },
+    (err) => Effect.logWarning(`Transient error, retrying: ${err.message}`)
+  ),
+  Match.orElse((err) => Effect.logError(`Permanent error: ${err.message}`))
+)
+```
+
+**Error Categories:**
+- `RateLimitError` - Request throttled (429s, provider limits)
+- `QuotaExhaustedError` - Account/billing limits reached
+- `AuthenticationError` - Invalid/expired credentials
+- `ContentPolicyError` - Content violated provider policy
+- `InvalidRequestError` - Malformed request parameters
+- `NetworkError` - Transport-level failures
+- `InvalidOutputError` - Output parsing/validation failures
+- `ToolNotFoundError` - Model requested non-existent tool
+- `ToolParameterValidationError` - Tool params failed validation
+
+### Model
+
+Unified interface for AI service providers.
+
+```typescript
+import type { Layer } from "effect"
+import { Effect } from "effect"
+import { LanguageModel, Model } from "effect/unstable/ai"
+
+declare const myAnthropicLayer: Layer.Layer<LanguageModel.LanguageModel>
+
+const anthropicModel = Model.make("anthropic", "claude-3-5-haiku", myAnthropicLayer)
+
+const program = Effect.gen(function*() {
+  const response = yield* LanguageModel.generateText({
+    prompt: "Hello, world!"
+  })
+  return response.text
+}).pipe(Effect.provide(anthropicModel))
+```
+
+### Tokenizer
+
+Tokenization and text truncation for managing context length constraints.
+
+```typescript
+import { Effect } from "effect"
+import { Tokenizer } from "effect/unstable/ai"
+
+const tokenizeText = Effect.gen(function*() {
+  const tokenizer = yield* Tokenizer.Tokenizer
+  const tokens = yield* tokenizer.tokenize("Hello, world!")
+  console.log(`Token count: ${tokens.length}`)
+  return tokens
+})
+
+// Truncate a prompt to fit token limits
+const truncatePrompt = Effect.gen(function*() {
+  const tokenizer = yield* Tokenizer.Tokenizer
+  const longPrompt = "This is a very long prompt..."
+  const truncated = yield* tokenizer.truncate(longPrompt, 100)
+  return truncated
+})
+```
+
+### Telemetry
+
+OpenTelemetry integration following GenAI semantic conventions.
+
+```typescript
+import { Effect } from "effect"
+import { Telemetry } from "effect/unstable/ai"
+
+// Add telemetry attributes to a span
+const addTelemetry = Effect.gen(function*() {
+  const span = yield* Effect.currentSpan
+  
+  Telemetry.addGenAIAnnotations(span, {
+    system: "openai",
+    operation: { name: "chat" },
+    request: {
+      model: "gpt-4",
+      temperature: 0.7,
+      maxTokens: 1000
+    },
+    usage: {
+      inputTokens: 100,
+      outputTokens: 50
+    }
+  })
+})
+```
+
+### IdGenerator
+
+Pluggable ID generation for tool calls and other AI operations.
+
+```typescript
+import { Effect } from "effect"
+import { IdGenerator } from "effect/unstable/ai"
+
+// Custom ID generator for tool calls
+const customLayer = IdGenerator.layer({
+  alphabet: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
+  prefix: "tool_call",
+  separator: "-",
+  size: 12
+})
+
+const program = Effect.gen(function*() {
+  const idGen = yield* IdGenerator.IdGenerator
+  const id = yield* idGen.generateId()
+  console.log(id) // "tool_call-A7XK9MP2QR5T"
+  return id
+}).pipe(Effect.provide(customLayer))
+```
+
+## Additional Modules
+
+### Structured Output Transformers
+
+- **AnthropicStructuredOutput** - Transform Effect schemas for Anthropic's API constraints
+- **OpenAiStructuredOutput** - Transform schemas for OpenAI structured output
+
+### MCP Integration
+
+- **McpSchema** - Model Context Protocol schema definitions
+- **McpServer** - MCP server implementation for Effect
+
+## Best Practices
+
+1. **Error Handling** - Always handle AI errors using the semantic error types
+2. **Streaming** - Use `streamText` for better user experience with long responses
+3. **Tool Safety** - Validate tool parameters with Effect schemas
+4. **Token Management** - Use Tokenizer to stay within model limits
+5. **Telemetry** - Add observability for production AI applications
+
+## Related Modules
+
+- [CLI](/api/unstable/cli) - Build command-line interfaces
+- [Cluster](/api/unstable/cluster) - Distributed computing primitives
+- [SQL](/api/unstable/sql) - Database integration

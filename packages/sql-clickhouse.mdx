@@ -1,0 +1,320 @@
+---
+title: "@effect/sql-clickhouse"
+description: "ClickHouse driver for Effect SQL"
+---
+
+## Overview
+
+`@effect/sql-clickhouse` provides a ClickHouse driver for Effect's SQL toolkit. It uses the official `@clickhouse/client` library and supports ClickHouse-specific features like custom data formats, query IDs, and settings.
+
+## Installation
+
+<CodeGroup>
+
+```bash npm
+npm install @effect/sql-clickhouse @effect/platform-node
+```
+
+```bash pnpm
+pnpm add @effect/sql-clickhouse @effect/platform-node
+```
+
+```bash yarn
+yarn add @effect/sql-clickhouse @effect/platform-node
+```
+
+</CodeGroup>
+
+<Note>
+  This package requires `@effect/platform-node` as a peer dependency.
+</Note>
+
+## Basic Usage
+
+### Creating a Client
+
+Use the `ClickhouseClient.layer` function to create a ClickHouse client layer:
+
+```typescript
+import { ClickhouseClient } from "@effect/sql-clickhouse"
+import { Effect, Layer } from "effect"
+
+const SqlLive = ClickhouseClient.layer({
+  url: "http://localhost:8123",
+  database: "default"
+})
+```
+
+### With Authentication
+
+Connect to ClickHouse with username and password:
+
+```typescript
+const SqlLive = ClickhouseClient.layer({
+  url: "http://localhost:8123",
+  database: "mydb",
+  username: "default",
+  password: "password"
+})
+```
+
+### Executing Queries
+
+```typescript
+import { Effect } from "effect"
+import { SqlClient } from "effect/unstable/sql"
+
+const program = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient
+
+  // Simple query
+  const users = yield* sql<{ id: number; name: string }>`
+    SELECT id, name FROM users WHERE active = ${true}
+  `
+
+  // Insert query
+  yield* sql`
+    INSERT INTO users ${sql.insert({ name: "Alice", email: "alice@example.com" })}
+  `
+})
+
+const runnable = program.pipe(Effect.provide(SqlLive))
+```
+
+## Configuration Options
+
+### Connection Options
+
+The configuration accepts all options from the ClickHouse client:
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `url` | `string` | ClickHouse server URL (e.g., "http://localhost:8123") |
+| `database` | `string` | Database name (default: "default") |
+| `username` | `string` | Username for authentication |
+| `password` | `string` | Password for authentication |
+| `request_timeout` | `number` | Request timeout in milliseconds |
+| `max_open_connections` | `number` | Maximum number of open connections |
+| `compression` | `{ request?: boolean; response?: boolean }` | Enable compression |
+
+### Transform Options
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `transformResultNames` | `(str: string) => string` | Transform column names in results |
+| `transformQueryNames` | `(str: string) => string` | Transform identifiers in queries |
+
+### Advanced Options
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `spanAttributes` | `Record<string, unknown>` | Custom telemetry attributes |
+
+## ClickHouse-Specific Features
+
+### Custom Data Formats
+
+ClickHouse supports multiple data formats. Use methods to retrieve results as raw values:
+
+```typescript
+const sql = yield* SqlClient.SqlClient
+
+// Get results as compact JSON (arrays instead of objects)
+const compact = yield* sql.values<[number, string]>`
+  SELECT id, name FROM users
+`
+// Returns: [[1, "Alice"], [2, "Bob"]]
+```
+
+### Typed Parameters
+
+Specify ClickHouse data types explicitly:
+
+```typescript
+const sql = yield* ClickhouseClient.ClickhouseClient
+
+// Use a specific ClickHouse type
+const result = yield* sql`
+  SELECT * FROM events WHERE timestamp > ${sql.param("DateTime", new Date())}
+`
+```
+
+### Query Execution Modes
+
+Control how queries are executed:
+
+```typescript
+const sql = yield* ClickhouseClient.ClickhouseClient
+
+// Execute as a command (no result set expected)
+const effect = sql.asCommand(
+  sql`ALTER TABLE users ADD COLUMN age UInt8`
+)
+
+yield* effect
+```
+
+### Query IDs
+
+Set custom query IDs for tracking and debugging:
+
+```typescript
+const sql = yield* ClickhouseClient.ClickhouseClient
+
+const users = yield* sql.withQueryId(
+  sql`SELECT * FROM users`,
+  "my-custom-query-id"
+)
+
+// Or using pipe style
+const effect = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient
+  return yield* sql`SELECT * FROM users`
+}).pipe(
+  sql.withQueryId("my-query-id")
+)
+```
+
+### ClickHouse Settings
+
+Pass ClickHouse-specific settings with queries:
+
+```typescript
+const sql = yield* ClickhouseClient.ClickhouseClient
+
+const users = yield* sql.withClickhouseSettings(
+  sql`SELECT * FROM users`,
+  {
+    max_execution_time: 60,
+    max_memory_usage: 10000000000
+  }
+)
+```
+
+### Bulk Insert
+
+For efficient bulk inserts, use the `insertQuery` method:
+
+```typescript
+import { ClickhouseClient } from "@effect/sql-clickhouse"
+
+const sql = yield* ClickhouseClient.ClickhouseClient
+
+const users = [
+  { name: "Alice", age: 30 },
+  { name: "Bob", age: 25 },
+  { name: "Charlie", age: 35 }
+]
+
+yield* sql.insertQuery({
+  table: "users",
+  values: users,
+  format: "JSONEachRow"
+})
+```
+
+## Transactions
+
+ClickHouse supports transactions:
+
+```typescript
+const sql = yield* SqlClient.SqlClient
+
+const result = yield* sql.withTransaction(
+  Effect.gen(function* () {
+    yield* sql`INSERT INTO accounts (balance) VALUES (${100})`
+    yield* sql`INSERT INTO logs (message) VALUES (${'Transaction complete'})`
+    return yield* sql<{ balance: number }>`SELECT balance FROM accounts LIMIT 1`
+  })
+)
+```
+
+## Streaming Results
+
+Stream large result sets efficiently:
+
+```typescript
+import { Stream } from "effect"
+
+const program = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient
+
+  const events = sql.stream<{ id: number; timestamp: Date; data: string }>`
+    SELECT id, timestamp, data FROM events WHERE date = today()
+  `
+
+  yield* Stream.runForEach(events, (event) =>
+    Effect.log(`Processing event: ${event.id}`)
+  )
+})
+```
+
+## Name Transformations
+
+Automatically convert between naming conventions:
+
+```typescript
+import { String } from "effect"
+
+const SqlLive = ClickhouseClient.layer({
+  url: "http://localhost:8123",
+  database: "mydb",
+  // Transform camelCase to snake_case for queries
+  transformQueryNames: String.camelToSnake,
+  // Transform snake_case to camelCase for results
+  transformResultNames: String.snakeToCamel
+})
+```
+
+## Error Handling
+
+All SQL errors are wrapped in `SqlError`:
+
+```typescript
+import { SqlError } from "effect/unstable/sql"
+
+const program = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient
+  return yield* sql`SELECT * FROM users`
+}).pipe(
+  Effect.catchTag("SqlError", (error) =>
+    Effect.log(`Database error: ${error.message}`)
+  )
+)
+```
+
+## Type Safety
+
+The client is fully typed with Effect's type system:
+
+```typescript
+interface Event {
+  id: number
+  timestamp: Date
+  data: string
+}
+
+const events = yield* sql<Event>`SELECT * FROM events`
+// events: ReadonlyArray<Event>
+```
+
+## Advanced Configuration
+
+Pass any ClickHouse client configuration option:
+
+```typescript
+const SqlLive = ClickhouseClient.layer({
+  url: "http://localhost:8123",
+  database: "mydb",
+  request_timeout: 30000,
+  max_open_connections: 10,
+  compression: {
+    request: true,
+    response: true
+  },
+  clickhouse_settings: {
+    async_insert: 1,
+    wait_for_async_insert: 1
+  }
+})
+```

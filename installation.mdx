@@ -1,0 +1,231 @@
+---
+title: Installation
+description: Install Effect and set up your TypeScript project
+---
+
+Effect requires TypeScript and Node.js (or another JavaScript runtime). This guide will help you set up Effect in your project.
+
+## Prerequisites
+
+Before installing Effect, ensure you have:
+
+- **Node.js** 18+ (or Bun/Deno)
+- **TypeScript** 5.0+
+- A package manager: **npm**, **pnpm**, **yarn**, or **bun**
+
+## Installation
+
+<Steps>
+  <Step title="Install the effect package">
+    Install Effect using your preferred package manager:
+
+    <CodeGroup>
+
+    ```bash npm
+    npm install effect
+    ```
+
+    ```bash pnpm
+    pnpm add effect
+    ```
+
+    ```bash yarn
+    yarn add effect
+    ```
+
+    ```bash bun
+    bun add effect
+    ```
+
+    </CodeGroup>
+
+    This installs the core `effect` package, which includes:
+    - Core Effect runtime and data types
+    - Built-in modules for concurrency, streaming, and error handling
+    - Schema validation and encoding
+    - Service and Layer utilities
+    - Observability features (logging, tracing, metrics)
+  </Step>
+
+  <Step title="Configure TypeScript">
+    Effect requires specific TypeScript compiler options. Add these to your `tsconfig.json`:
+
+    ```json tsconfig.json
+    {
+      "compilerOptions": {
+        "strict": true,
+        "target": "ES2022",
+        "module": "NodeNext",
+        "moduleResolution": "NodeNext",
+        "lib": ["ES2022"],
+        "skipLibCheck": true
+      }
+    }
+    ```
+
+    <Note>
+      The `strict` flag is highly recommended for the best type-safety experience with Effect.
+    </Note>
+  </Step>
+
+  <Step title="Verify installation">
+    Create a simple test file to verify Effect is working:
+
+    ```typescript index.ts
+    import { Effect } from "effect"
+
+    const program = Effect.gen(function*() {
+      yield* Effect.log("Effect is installed!")
+      return "Success"
+    })
+
+    Effect.runPromise(program).then(console.log)
+    ```
+
+    Run the file:
+
+    ```bash
+    npx tsx index.ts
+    # or
+    node --import tsx index.ts
+    ```
+
+    You should see the log message and "Success" printed to the console.
+  </Step>
+</Steps>
+
+## Platform-Specific Packages
+
+Depending on your runtime environment, you may need additional packages:
+
+### Node.js
+
+For Node.js-specific features like file system access and HTTP servers:
+
+```bash
+npm install @effect/platform-node
+```
+
+This provides:
+- `NodeRuntime` for running Effect programs
+- File system operations
+- HTTP client and server
+- Command execution and child processes
+- Terminal and readline utilities
+
+### Bun
+
+For Bun runtime support:
+
+```bash
+bun add @effect/platform-bun
+```
+
+This provides Bun-optimized versions of platform APIs.
+
+### Browser
+
+For browser environments:
+
+```bash
+npm install @effect/platform-browser
+```
+
+This includes browser-specific APIs and utilities.
+
+## Optional Packages
+
+Effect has a rich ecosystem of optional packages for specialized use cases:
+
+<CardGroup cols={2}>
+  <Card title="Testing" icon="flask">
+    ```bash
+    npm install --save-dev @effect/vitest
+    ```
+    Effect-aware test utilities for Vitest
+  </Card>
+
+  <Card title="OpenTelemetry" icon="chart-line">
+    ```bash
+    npm install @effect/opentelemetry
+    ```
+    Export traces and metrics to OpenTelemetry
+  </Card>
+
+  <Card title="SQL" icon="database">
+    ```bash
+    npm install @effect/sql
+    ```
+    Type-safe SQL query builders and clients
+  </Card>
+
+  <Card title="RPC" icon="network-wired">
+    ```bash
+    npm install @effect/rpc
+    ```
+    Build type-safe RPC services
+  </Card>
+</CardGroup>
+
+<Note>
+  Many advanced features are available in the main `effect` package under `effect/unstable/*` paths. These APIs are production-ready but may have breaking changes in minor versions.
+</Note>
+
+## Package Structure
+
+The `effect` package uses subpath exports for organizing functionality:
+
+```typescript
+// Core Effect
+import { Effect, Layer } from "effect"
+
+// Testing utilities
+import { TestContext } from "effect/testing"
+
+// Unstable features (production-ready, may have breaking changes)
+import { HttpClient } from "effect/unstable/http"
+import { LanguageModel } from "effect/unstable/ai"
+import { CliApp } from "effect/unstable/cli"
+```
+
+## Editor Setup
+
+### VS Code
+
+For the best development experience in VS Code:
+
+1. Install the **Effect Language Service** extension
+2. This provides:
+   - Enhanced type checking for Effect code
+   - Better error messages
+   - Improved autocomplete
+
+### Other Editors
+
+Effect works with any editor that supports TypeScript. Ensure you have:
+- TypeScript language server enabled
+- IntelliSense/autocomplete configured
+
+## Next Steps
+
+Now that Effect is installed, you're ready to build your first program:
+
+<Card title="Quick Start" icon="bolt" href="/get-started/quickstart">
+  Build your first Effect application with a complete working example
+</Card>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Module resolution errors">
+    If you see module resolution errors, ensure your `tsconfig.json` has `moduleResolution` set to `"NodeNext"` or `"Bundler"`. Effect uses modern ES modules.
+  </Accordion>
+
+  <Accordion title="Type errors with generators">
+    If you see type errors in generator functions, make sure you're using `yield*` (not `yield`) and that your TypeScript version is 5.0 or higher.
+  </Accordion>
+
+  <Accordion title="Runtime errors about missing modules">
+    If you get runtime errors about missing modules, you may need to install platform-specific packages like `@effect/platform-node` for Node.js features.
+  </Accordion>
+</AccordionGroup>

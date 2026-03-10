@@ -1,0 +1,430 @@
+---
+title: Error Handling
+description: Learn how to define, raise, and recover from errors in Effect v4
+---
+
+Effect provides a type-safe approach to error handling where errors are tracked in the type system. This makes it impossible to forget to handle errors and enables powerful recovery patterns.
+
+## Why Typed Errors?
+
+In traditional TypeScript, errors can be thrown from anywhere and aren't tracked in types:
+
+```typescript
+// What errors can this throw? You have to read the code or docs!
+function parsePort(input: string): number {
+  const port = parseInt(input)
+  if (isNaN(port)) throw new Error("Invalid port")
+  if (port < 1024) throw new Error("Reserved port")
+  return port
+}
+```
+
+With Effect, errors are explicit in the type signature:
+
+```typescript
+import { Effect } from "effect"
+
+function parsePort(input: string): Effect.Effect<number, ParseError | ReservedPortError> {
+  // Errors are tracked in the type!
+}
+```
+
+<Info>
+  Effect's type system ensures you handle all possible errors, preventing runtime surprises.
+</Info>
+
+## Defining Errors with Schema.TaggedErrorClass
+
+The standard way to define errors in Effect is using `Schema.TaggedErrorClass`:
+
+```typescript
+import { Schema } from "effect"
+
+// Define custom errors using Schema.TaggedErrorClass
+export class ParseError extends Schema.TaggedErrorClass<ParseError>()("ParseError", {
+  input: Schema.String,
+  message: Schema.String
+}) {}
+
+export class ReservedPortError extends Schema.TaggedErrorClass<ReservedPortError>()("ReservedPortError", {
+  port: Schema.Number
+}) {}
+```
+
+<Note>
+  Tagged errors have a `_tag` field that identifies the error type. This enables type-safe pattern matching.
+</Note>
+
+### Why Use TaggedErrorClass?
+
+<Accordion title="Structured Error Data">
+  Tagged errors can carry structured data about the failure:
+  
+  ```typescript
+  class ValidationError extends Schema.TaggedErrorClass<ValidationError>()("ValidationError", {
+    field: Schema.String,
+    value: Schema.Unknown,
+    rule: Schema.String
+  }) {}
+  
+  // Usage
+  new ValidationError({
+    field: "email",
+    value: "invalid",
+    rule: "must be valid email"
+  })
+  ```
+</Accordion>
+
+<Accordion title="Type-Safe Pattern Matching">
+  The `_tag` field enables exhaustive pattern matching:
+  
+  ```typescript
+  effect.pipe(
+    Effect.catchTag("ValidationError", (error) => {
+      // error is narrowed to ValidationError
+      console.log(`Field ${error.field} failed: ${error.rule}`)
+      return Effect.succeed(defaultValue)
+    })
+  )
+  ```
+</Accordion>
+
+<Accordion title="Schema Validation">
+  Tagged errors are automatically validated against their schema, ensuring data integrity.
+</Accordion>
+
+## Raising Errors
+
+Raise errors by yielding them in `Effect.gen` or `Effect.fn`:
+
+```typescript
+import { Effect, Schema } from "effect"
+
+class InvalidInput extends Schema.TaggedErrorClass<InvalidInput>()("InvalidInput", {
+  message: Schema.String
+}) {}
+
+const program = Effect.gen(function*() {
+  const input = yield* getInput()
+  
+  if (!isValid(input)) {
+    // Always use `return yield*` when raising errors
+    return yield* new InvalidInput({ message: "Input validation failed" })
+  }
+  
+  return processInput(input)
+})
+```
+
+<Warning>
+  Always use `return yield*` when raising errors in `Effect.gen` or `Effect.fn`. This ensures TypeScript understands the control flow.
+</Warning>
+
+## Catching Errors
+
+Effect provides several ways to catch and recover from errors.
+
+### Effect.catchTag - Catch a Specific Error
+
+Use `Effect.catchTag` to handle a single error type:
+
+```typescript
+import { Effect, Schema } from "effect"
+
+class ParseError extends Schema.TaggedErrorClass<ParseError>()("ParseError", {
+  input: Schema.String,
+  message: Schema.String
+}) {}
+
+class ReservedPortError extends Schema.TaggedErrorClass<ReservedPortError>()("ReservedPortError", {
+  port: Schema.Number
+}) {}
+
+declare const loadPort: (input: string) => Effect.Effect<number, ParseError | ReservedPortError>
+
+const withRecovery = loadPort("80").pipe(
+  // Catch a specific error with Effect.catchTag
+  Effect.catchTag("ReservedPortError", (error) => {
+    // error is narrowed to ReservedPortError
+    console.log(`Port ${error.port} is reserved, using default`)
+    return Effect.succeed(3000)
+  })
+)
+// Type: Effect<number, ParseError, never>
+// ReservedPortError is handled!
+```
+
+### Effect.catchTag - Catch Multiple Errors
+
+You can also pass an array of tags to catch multiple errors with the same handler:
+
+```typescript
+const recovered = loadPort("80").pipe(
+  // Catch multiple errors with Effect.catchTag
+  Effect.catchTag(["ParseError", "ReservedPortError"], (error) => {
+    // error is narrowed to ParseError | ReservedPortError
+    return Effect.succeed(3000)
+  })
+)
+// Type: Effect<number, never, never>
+// Both errors are handled!
+```
+
+### Effect.catchTags - Catch Multiple Errors Differently
+
+Use `Effect.catchTags` to handle different errors with different logic:
+
+```typescript
+import { Effect, Schema } from "effect"
+
+class ValidationError extends Schema.TaggedErrorClass<ValidationError>()("ValidationError", {
+  message: Schema.String
+}) {}
+
+class NetworkError extends Schema.TaggedErrorClass<NetworkError>()("NetworkError", {
+  statusCode: Schema.Number
+}) {}
+
+declare const fetchUser: (id: string) => Effect.Effect<string, ValidationError | NetworkError>
+
+const userOrFallback = fetchUser("123").pipe(
+  Effect.catchTags({
+    ValidationError: (error) => 
+      Effect.succeed(`Validation failed: ${error.message}`),
+    NetworkError: (error) => 
+      Effect.succeed(`Network request failed with status ${error.statusCode}`)
+  })
+)
+// Type: Effect<string, never, never>
+```
+
+<Tip>
+  Use `Effect.catchTags` when you need different recovery strategies for different error types.
+</Tip>
+
+### Effect.catch - Catch All Errors
+
+Use `Effect.catch` to handle any error:
+
+```typescript
+const withFinalFallback = loadPort("invalid").pipe(
+  Effect.catchTag("ReservedPortError", () => Effect.succeed(3000)),
+  // Catch all remaining errors with Effect.catch
+  Effect.catch((error) => {
+    // error could be any remaining error type
+    console.log("Unexpected error:", error)
+    return Effect.succeed(3000)
+  })
+)
+// Type: Effect<number, never, never>
+```
+
+<Note>
+  `Effect.catch` catches all errors, including any unhandled error types. Use it as a final fallback.
+</Note>
+
+## Error Transformation
+
+### Effect.mapError
+
+Transform errors into different error types:
+
+```typescript
+import { Effect, Schema } from "effect"
+
+class DatabaseError extends Schema.TaggedErrorClass<DatabaseError>()("DatabaseError", {
+  cause: Schema.Defect
+}) {}
+
+class UserRepositoryError extends Schema.TaggedErrorClass<UserRepositoryError>()("UserRepositoryError", {
+  reason: DatabaseError
+}) {}
+
+declare const queryDatabase: Effect.Effect<User, DatabaseError>
+
+const findUser = queryDatabase.pipe(
+  Effect.mapError((dbError) => new UserRepositoryError({ reason: dbError }))
+)
+// Type: Effect<User, UserRepositoryError, never>
+```
+
+<Tip>
+  Use `Effect.mapError` to wrap lower-level errors in domain-specific error types.
+</Tip>
+
+## Error Recovery Patterns
+
+### Provide Default Values
+
+```typescript
+const userOrDefault = fetchUser("123").pipe(
+  Effect.catchTag("NotFound", () => Effect.succeed({ id: "123", name: "Guest" }))
+)
+```
+
+### Retry on Specific Errors
+
+```typescript
+import { Schedule } from "effect"
+
+const withRetry = fetchUser("123").pipe(
+  Effect.retry({
+    schedule: Schedule.exponential("100 millis").pipe(
+      Schedule.upTo("5 seconds")
+    ),
+    while: (error) => error._tag === "NetworkError"
+  })
+)
+```
+
+### Fallback to Alternative
+
+```typescript
+const userFromCacheOrDb = fetchFromCache("123").pipe(
+  Effect.catchTag("CacheMiss", () => fetchFromDatabase("123"))
+)
+```
+
+### Log and Rethrow
+
+```typescript
+const withLogging = fetchUser("123").pipe(
+  Effect.tapError((error) => 
+    Effect.logError("Failed to fetch user:", error)
+  )
+)
+// Error is logged but still propagates
+```
+
+## Error Channels
+
+Effect has two separate channels for errors:
+
+<Accordion title="Expected Errors (E channel)">
+  Expected errors are tracked in the type signature and must be handled:
+  
+  ```typescript
+  const program: Effect.Effect<number, ParseError, never>
+  ```
+  
+  These represent recoverable failures that are part of your domain logic.
+</Accordion>
+
+<Accordion title="Unexpected Errors (Defects)">
+  Defects are unexpected errors (like bugs) that aren't tracked in types:
+  
+  ```typescript
+  Effect.die(new Error("This should never happen"))
+  ```
+  
+  Use defects for programming errors, not recoverable failures.
+</Accordion>
+
+<Warning>
+  Don't use defects for expected error conditions. Use tagged errors instead so they're tracked in types.
+</Warning>
+
+## Combining Error Handling
+
+Chain error handlers for sophisticated recovery:
+
+```typescript
+const robust = fetchUser("123").pipe(
+  // Try to recover from specific errors
+  Effect.catchTag("NetworkError", () => fetchFromCache("123")),
+  Effect.catchTag("CacheMiss", () => Effect.succeed(guestUser)),
+  // Log any remaining errors
+  Effect.tapError((error) => Effect.logError("Unexpected error:", error)),
+  // Final fallback
+  Effect.catch(() => Effect.succeed(guestUser))
+)
+```
+
+## Best Practices
+
+<Steps>
+  <Step title="Use Schema.TaggedErrorClass for all domain errors">
+    Tagged errors enable type-safe pattern matching and carry structured data
+  </Step>
+  <Step title="Be specific with error types">
+    Create separate error classes for different failure modes
+  </Step>
+  <Step title="Handle errors close to where they occur">
+    Catch and transform errors at the right abstraction level
+  </Step>
+  <Step title="Use Effect.mapError to wrap errors">
+    Wrap lower-level errors in domain-specific errors as you move up layers
+  </Step>
+  <Step title="Always use return yield* when raising errors">
+    This ensures TypeScript understands the control flow
+  </Step>
+</Steps>
+
+<Tip>
+  Design your error hierarchy to match your domain. Each service should have its own error types.
+</Tip>
+
+## Common Patterns
+
+### Wrapping External Errors
+
+```typescript
+import { Effect, Schema } from "effect"
+
+class HttpError extends Schema.TaggedErrorClass<HttpError>()("HttpError", {
+  statusCode: Schema.Number,
+  cause: Schema.Defect
+}) {}
+
+const fetchData = (url: string) =>
+  Effect.tryPromise({
+    try: () => fetch(url).then(r => r.json()),
+    catch: (cause) => new HttpError({ 
+      statusCode: (cause as any).status ?? 500,
+      cause 
+    })
+  })
+```
+
+### Error Reason Patterns
+
+```typescript
+import { Schema } from "effect"
+
+class UserError extends Schema.TaggedErrorClass<UserError>()("UserError", {
+  reason: Schema.TaggedUnion(
+    Schema.TaggedStruct("NotFound", { userId: Schema.String }),
+    Schema.TaggedStruct("Suspended", { userId: Schema.String, until: Schema.Date }),
+    Schema.TaggedStruct("InvalidCredentials", {})
+  )
+}) {}
+
+// Handle based on reason
+effect.pipe(
+  Effect.catchTag("UserError", (error) => {
+    switch (error.reason._tag) {
+      case "NotFound":
+        return handleNotFound(error.reason.userId)
+      case "Suspended":
+        return handleSuspended(error.reason.userId, error.reason.until)
+      case "InvalidCredentials":
+        return handleInvalidCredentials()
+    }
+  })
+)
+```
+
+## Next Steps
+
+<Steps>
+  <Step title="Learn about Services">
+    Understand how errors propagate through services at [Services](/concepts/services)
+  </Step>
+  <Step title="Master Resource Management">
+    See how errors interact with resources in [Resources](/concepts/resources)
+  </Step>
+  <Step title="Explore the Effect Type">
+    Review the basics at [Effect](/concepts/effect)
+  </Step>
+</Steps>

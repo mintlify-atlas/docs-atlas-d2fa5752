@@ -1,0 +1,445 @@
+---
+title: Resources
+description: Learn how to safely manage resources with Effect.acquireRelease, Scope, and finalizers in Effect v4
+---
+
+Resource management is critical in any application. Effect provides powerful primitives to ensure resources are always properly cleaned up, even when errors occur or operations are interrupted.
+
+## The Resource Problem
+
+Resources like database connections, file handles, and network sockets must be:
+1. **Acquired** before use
+2. **Used** for some operation
+3. **Released** when done, even if errors occur
+
+Traditional approaches using try/finally are error-prone:
+
+```typescript
+// Easy to forget cleanup, or miss edge cases
+const connection = await createConnection()
+try {
+  await useConnection(connection)
+} finally {
+  await connection.close() // What if this throws?
+}
+```
+
+<Info>
+  Effect's resource management ensures cleanup happens automatically, even during errors, interruptions, or concurrent operations.
+</Info>
+
+## Effect.acquireRelease
+
+The primary way to manage resources is with `Effect.acquireRelease`:
+
+```typescript
+import { Effect } from "effect"
+
+const managedResource = Effect.acquireRelease(
+  // Acquire: Effect to create the resource
+  Effect.sync(() => createResource()),
+  // Release: Effect to clean up the resource
+  (resource) => Effect.sync(() => resource.close())
+)
+```
+
+<Note>
+  The release finalizer **always runs**, even if the resource usage fails or is interrupted.
+</Note>
+
+### Complete Example: SMTP Service
+
+Here's a real-world example of managing an SMTP connection:
+
+```typescript
+import { Config, Effect, Layer, Redacted, Schema, ServiceMap } from "effect"
+import * as NodeMailer from "nodemailer"
+
+class SmtpError extends Schema.ErrorClass<SmtpError>("SmtpError")({
+  cause: Schema.Defect
+}) {}
+
+export class Smtp extends ServiceMap.Service<Smtp, {
+  send(message: {
+    readonly to: string
+    readonly subject: string
+    readonly body: string
+  }): Effect.Effect<void, SmtpError>
+}>()("app/Smtp") {
+  static readonly layer = Layer.effect(
+    Smtp,
+    Effect.gen(function*() {
+      const user = yield* Config.string("SMTP_USER")
+      const pass = yield* Config.redacted("SMTP_PASS")
+
+      // Use `Effect.acquireRelease` to manage the lifecycle of the SMTP
+      // transporter.
+      //
+      // When the Layer is built, the transporter will be created. When the
+      // Layer is torn down, the transporter will be closed, ensuring that
+      // resources are always cleaned up properly.
+      const transporter = yield* Effect.acquireRelease(
+        Effect.sync(() =>
+          NodeMailer.createTransport({
+            host: "smtp.example.com",
+            port: 587,
+            secure: false,
+            auth: { user, pass: Redacted.value(pass) }
+          })
+        ),
+        (transporter) => Effect.sync(() => transporter.close())
+      )
+
+      const send = Effect.fn("Smtp.send")((message: {
+        readonly to: string
+        readonly subject: string
+        readonly body: string
+      }) =>
+        Effect.tryPromise({
+          try: () =>
+            transporter.sendMail({
+              from: "Acme Cloud <cloud@acme.com>",
+              to: message.to,
+              subject: message.subject,
+              text: message.body
+            }),
+          catch: (cause) => new SmtpError({ cause })
+        }).pipe(
+          Effect.asVoid
+        )
+      )
+
+      return Smtp.of({ send })
+    })
+  )
+}
+```
+
+<Steps>
+  <Step title="Acquire the resource">
+    Create the SMTP transporter in the acquire phase
+  </Step>
+  <Step title="Use the resource">
+    Build service methods that use the transporter
+  </Step>
+  <Step title="Automatic cleanup">
+    The transporter is automatically closed when the layer scope closes
+  </Step>
+</Steps>
+
+### Resource Lifecycle
+
+<Accordion title="When does acquire run?">
+  The acquire effect runs when the resource enters scope:
+  - For `Effect.acquireRelease` used directly: when the effect is executed
+  - For resources in layers: when the layer is built
+</Accordion>
+
+<Accordion title="When does release run?">
+  The release finalizer runs when the scope closes:
+  - On successful completion
+  - On error/failure
+  - On interruption
+  - When the program exits
+  
+  Release **always runs**, guaranteeing cleanup.
+</Accordion>
+
+<Accordion title="What if release fails?">
+  If the release effect fails, the error is logged but doesn't prevent other finalizers from running. All finalizers run, even if some fail.
+</Accordion>
+
+## Scopes
+
+A `Scope` tracks resources and ensures their finalizers run. Most of the time, you don't work with scopes directly—they're managed automatically.
+
+### Automatic Scopes
+
+Scopes are created automatically in these contexts:
+
+```typescript
+import { Effect, Layer } from "effect"
+
+// 1. Layer.effect creates a scope for the layer
+const MyServiceLayer = Layer.effect(
+  MyService,
+  Effect.gen(function*() {
+    // Resources acquired here are scoped to this layer
+    const resource = yield* Effect.acquireRelease(
+      acquire,
+      release
+    )
+    return MyService.of({ /* ... */ })
+  })
+)
+
+// 2. Effect.scoped creates an explicit scope
+const scoped = Effect.scoped(
+  Effect.gen(function*() {
+    const resource = yield* Effect.acquireRelease(acquire, release)
+    yield* useResource(resource)
+    // resource is released when this scope closes
+  })
+)
+```
+
+<Info>
+  Layers automatically create scopes for their resources. When you provide a layer to an effect, the layer's scope lasts for the duration of that effect.
+</Info>
+
+### Effect.forkScoped
+
+Fork background tasks that are tied to a scope:
+
+```typescript
+import { Effect, Layer } from "effect"
+
+const BackgroundTask = Layer.effectDiscard(Effect.gen(function*() {
+  yield* Effect.logInfo("Starting background task...")
+
+  // Fork a fiber that runs until the layer scope closes
+  yield* Effect.gen(function*() {
+    while (true) {
+      yield* Effect.sleep("5 seconds")
+      yield* Effect.logInfo("Background task running...")
+    }
+  }).pipe(
+    Effect.onInterrupt(() => Effect.logInfo("Background task interrupted: layer scope closed")),
+    Effect.forkScoped  // Tied to the layer's scope
+  )
+}))
+```
+
+<Tip>
+  Use `Effect.forkScoped` for background tasks that should be automatically interrupted when a scope closes.
+</Tip>
+
+## Finalizers
+
+Finalizers are cleanup functions registered with a scope. `Effect.acquireRelease` is the high-level API, but you can also add finalizers directly:
+
+### Effect.addFinalizer
+
+Manually add a finalizer to the current scope:
+
+```typescript
+import { Effect } from "effect"
+
+const program = Effect.gen(function*() {
+  yield* Effect.logInfo("Starting...")
+  
+  // Add a finalizer to the current scope
+  yield* Effect.addFinalizer(() => 
+    Effect.logInfo("Cleaning up...")
+  )
+  
+  yield* doWork()
+  
+  // Finalizer runs when this scope closes
+})
+```
+
+### Finalizer Execution Order
+
+Finalizers run in **reverse order** of registration (LIFO - Last In, First Out):
+
+```typescript
+const program = Effect.gen(function*() {
+  yield* Effect.addFinalizer(() => Effect.log("Cleanup 1"))
+  yield* Effect.addFinalizer(() => Effect.log("Cleanup 2"))
+  yield* Effect.addFinalizer(() => Effect.log("Cleanup 3"))
+})
+// Outputs:
+// Cleanup 3
+// Cleanup 2
+// Cleanup 1
+```
+
+<Note>
+  LIFO order ensures dependencies are cleaned up in the correct order. Resources acquired first are released last.
+</Note>
+
+## Common Patterns
+
+### Database Connection Pools
+
+```typescript
+import { Effect, Layer, Schema, ServiceMap } from "effect"
+import { Pool } from "pg"
+
+class DatabaseError extends Schema.TaggedErrorClass<DatabaseError>()("DatabaseError", {
+  cause: Schema.Defect
+}) {}
+
+export class Database extends ServiceMap.Service<Database, {
+  query<A>(sql: string): Effect.Effect<Array<A>, DatabaseError>
+}>()("app/Database") {
+  static readonly layer = Layer.effect(
+    Database,
+    Effect.gen(function*() {
+      // Acquire connection pool
+      const pool = yield* Effect.acquireRelease(
+        Effect.sync(() => new Pool({
+          host: "localhost",
+          database: "myapp"
+        })),
+        (pool) => Effect.promise(() => pool.end())
+      )
+
+      const query = Effect.fn("Database.query")(function*<A>(sql: string) {
+        return yield* Effect.tryPromise({
+          try: () => pool.query(sql).then(r => r.rows as Array<A>),
+          catch: (cause) => new DatabaseError({ cause })
+        })
+      })
+
+      return Database.of({ query })
+    })
+  )
+}
+```
+
+### File Handles
+
+```typescript
+import { Effect } from "effect"
+import * as FS from "node:fs/promises"
+
+const readFile = (path: string) =>
+  Effect.acquireRelease(
+    Effect.promise(() => FS.open(path, "r")),
+    (handle) => Effect.promise(() => handle.close())
+  ).pipe(
+    Effect.flatMap((handle) => 
+      Effect.promise(() => handle.readFile("utf-8"))
+    )
+  )
+```
+
+### HTTP Server Lifecycle
+
+```typescript
+import { Effect, Layer } from "effect"
+import { createServer } from "node:http"
+
+const HttpServerLayer = Layer.effectDiscard(
+  Effect.gen(function*() {
+    const server = yield* Effect.acquireRelease(
+      Effect.sync(() => createServer((req, res) => {
+        res.writeHead(200)
+        res.end("Hello World")
+      })),
+      (server) => Effect.promise(() => 
+        new Promise<void>((resolve) => server.close(() => resolve()))
+      )
+    )
+
+    yield* Effect.sync(() => server.listen(3000))
+    yield* Effect.logInfo("Server listening on port 3000")
+  })
+)
+```
+
+## Composing Resource Services
+
+When services depend on other resource-managed services:
+
+```typescript
+import { Effect, Layer, Schema, ServiceMap } from "effect"
+
+class MailerError extends Schema.TaggedErrorClass<MailerError>()("MailerError", {
+  reason: SmtpError
+}) {}
+
+export class Mailer extends ServiceMap.Service<Mailer, {
+  sendWelcomeEmail(to: string): Effect.Effect<void, MailerError>
+}>()("app/Mailer") {
+  static readonly layerNoDeps = Layer.effect(
+    Mailer,
+    Effect.gen(function*() {
+      // Smtp service manages its own resources
+      const smtp = yield* Smtp
+
+      const sendWelcomeEmail = Effect.fn("Mailer.sendWelcomeEmail")(function*(to: string) {
+        yield* smtp.send({
+          to,
+          subject: "Welcome to Acme Cloud!",
+          body: "Thanks for signing up for Acme Cloud. We're glad to have you!"
+        }).pipe(
+          Effect.mapError((reason) => new MailerError({ reason }))
+        )
+        yield* Effect.logInfo(`Sent welcome email to ${to}`)
+      })
+
+      return Mailer.of({ sendWelcomeEmail })
+    })
+  )
+
+  // Locally provide the Smtp layer to the Mailer layer
+  static readonly layer = this.layerNoDeps.pipe(
+    Layer.provide(Smtp.layer)
+  )
+}
+```
+
+<Info>
+  When layers are composed, their scopes are properly nested. Child layer resources are released before parent layer resources.
+</Info>
+
+## Best Practices
+
+<Steps>
+  <Step title="Always use Effect.acquireRelease for resources">
+    Don't rely on try/finally or manual cleanup—use acquire/release
+  </Step>
+  <Step title="Put resources in Layer.effect">
+    Layer scopes automatically manage resource lifecycles
+  </Step>
+  <Step title="Use Effect.forkScoped for background tasks">
+    Ensure background work is interrupted when scopes close
+  </Step>
+  <Step title="Keep acquire and release simple">
+    Avoid complex logic in acquire/release—they should be straightforward create/destroy operations
+  </Step>
+  <Step title="Test resource cleanup">
+    Verify that resources are properly released, even during errors and interruptions
+  </Step>
+</Steps>
+
+<Warning>
+  Don't perform complex business logic in release finalizers. Keep cleanup focused on resource disposal.
+</Warning>
+
+<Tip>
+  Use `Effect.ensuring` if you need to run cleanup that isn't a resource finalizer:
+  
+  ```typescript
+  program.pipe(
+    Effect.ensuring(Effect.logInfo("Program completed"))
+  )
+  ```
+</Tip>
+
+## Resource Cleanup Guarantees
+
+Effect provides strong guarantees about resource cleanup:
+
+1. **Finalizers always run**: Even on errors, interruptions, or defects
+2. **LIFO order**: Resources are released in reverse order of acquisition
+3. **Scope isolation**: Resources in child scopes don't leak to parent scopes
+4. **Interruption safety**: Cleanup happens even when fibers are interrupted
+5. **Error handling**: Release failures are logged but don't prevent other finalizers
+
+## Next Steps
+
+<Steps>
+  <Step title="Master Layers">
+    Learn advanced layer patterns at [Layers](/concepts/layers)
+  </Step>
+  <Step title="Handle Errors Properly">
+    Understand error handling in [Error Handling](/concepts/error-handling)
+  </Step>
+  <Step title="Build Services">
+    Create resource-managed services at [Services](/concepts/services)
+  </Step>
+</Steps>

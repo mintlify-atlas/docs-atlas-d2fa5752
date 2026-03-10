@@ -1,0 +1,553 @@
+---
+title: "Schema"
+description: "Define, validate, and transform data structures with type safety"
+---
+
+Effect Schema provides a powerful way to define data structures with runtime validation, transformation, and serialization capabilities.
+
+## Overview
+
+Schema is a core Effect module that enables:
+
+- **Type-safe validation** with automatic TypeScript inference
+- **Data transformation** between different representations
+- **Serialization** and deserialization
+- **Error handling** with detailed validation errors
+- **Schema composition** for complex data structures
+
+## Basic Schemas
+
+### Primitive Types
+
+Define schemas for basic types:
+
+```typescript
+import { Schema } from "effect"
+
+// Basic primitives
+const StringSchema = Schema.String
+const NumberSchema = Schema.Number
+const BooleanSchema = Schema.Boolean
+const DateSchema = Schema.Date
+
+// Use schemas to validate
+const validateString = Schema.decode(StringSchema)
+
+const result = validateString("hello") // Effect<string, SchemaError>
+```
+
+### Struct Schemas
+
+Define object structures:
+
+```typescript
+import { Schema } from "effect"
+
+const User = Schema.Struct({
+  id: Schema.Number,
+  name: Schema.String,
+  email: Schema.String,
+  age: Schema.optional(Schema.Number),
+  isActive: Schema.Boolean
+})
+
+type User = Schema.Type<typeof User>
+// {
+//   id: number
+//   name: string
+//   email: string
+//   age?: number
+//   isActive: boolean
+// }
+```
+
+### Array and Union Schemas
+
+```typescript
+import { Schema } from "effect"
+
+// Array of strings
+const StringArray = Schema.Array(Schema.String)
+
+// Union type
+const Status = Schema.Union(
+  Schema.Literal("pending"),
+  Schema.Literal("approved"),
+  Schema.Literal("rejected")
+)
+
+// Array of objects
+const Users = Schema.Array(
+  Schema.Struct({
+    id: Schema.Number,
+    name: Schema.String
+  })
+)
+```
+
+## Validation
+
+### Decoding and Encoding
+
+Schemas support bidirectional transformation:
+
+```typescript
+import { Effect, Schema } from "effect"
+
+const User = Schema.Struct({
+  id: Schema.Number,
+  name: Schema.String,
+  email: Schema.String
+})
+
+const program = Effect.gen(function* () {
+  const decode = Schema.decode(User)
+  
+  // Decode from unknown input
+  const user = yield* decode({
+    id: 1,
+    name: "Alice",
+    email: "alice@example.com"
+  })
+  
+  console.log(user)
+  // { id: 1, name: "Alice", email: "alice@example.com" }
+})
+```
+
+### Validation with Refinements
+
+Add custom validation rules:
+
+```typescript
+import { Schema } from "effect"
+
+// Email validation
+const Email = Schema.String.check(
+  Schema.pattern(/^[^@]+@[^@]+\.[^@]+$/),
+  { message: () => "Invalid email format" }
+)
+
+// Age validation
+const Age = Schema.Number.check(
+  Schema.isBetween({ minimum: 0, maximum: 150 }),
+  { message: () => "Age must be between 0 and 150" }
+)
+
+// Use in struct
+const User = Schema.Struct({
+  name: Schema.NonEmptyString,
+  email: Email,
+  age: Age
+})
+```
+
+### Handling Validation Errors
+
+```typescript
+import { Effect, Schema } from "effect"
+
+const User = Schema.Struct({
+  name: Schema.NonEmptyString,
+  age: Schema.Number
+})
+
+const program = Effect.gen(function* () {
+  const result = yield* Schema.decode(User)({
+    name: "",
+    age: "not a number"
+  }).pipe(
+    Effect.catchTag("SchemaError", (error) =>
+      Effect.gen(function* () {
+        yield* Effect.logError("Validation failed:", error.message)
+        return null
+      })
+    )
+  )
+  
+  return result
+})
+```
+
+## Transformations
+
+### Schema Transformations
+
+Transform data between different representations:
+
+```typescript
+import { Schema } from "effect"
+
+// Transform string to Date
+const DateFromString = Schema.String.decodeTo(
+  Schema.Date,
+  {
+    decode: (s) => new Date(s),
+    encode: (d) => d.toISOString()
+  }
+)
+
+// Transform number to boolean
+const BooleanFromNumber = Schema.Number.decodeTo(
+  Schema.Boolean,
+  {
+    decode: (n) => n !== 0,
+    encode: (b) => b ? 1 : 0
+  }
+)
+```
+
+### Complex Transformations
+
+```typescript
+import { Effect, Schema } from "effect"
+
+// Database representation
+const UserEncoded = Schema.Struct({
+  id: Schema.Number,
+  full_name: Schema.String,
+  email_address: Schema.String,
+  created_at: Schema.String
+})
+
+// Application representation
+const User = Schema.Struct({
+  id: Schema.Number,
+  name: Schema.String,
+  email: Schema.String,
+  createdAt: Schema.Date
+})
+
+// Transform between representations
+const UserFromDb = UserEncoded.decodeTo(User, {
+  decode: (encoded) => ({
+    id: encoded.id,
+    name: encoded.full_name,
+    email: encoded.email_address,
+    createdAt: new Date(encoded.created_at)
+  }),
+  encode: (user) => ({
+    id: user.id,
+    full_name: user.name,
+    email_address: user.email,
+    created_at: user.createdAt.toISOString()
+  })
+})
+```
+
+## Tagged Schemas
+
+### Tagged Unions
+
+Create discriminated unions with tags:
+
+```typescript
+import { Schema } from "effect"
+
+const Success = Schema.TaggedStruct("Success", {
+  value: Schema.String
+})
+
+const Failure = Schema.TaggedStruct("Failure", {
+  error: Schema.String
+})
+
+const Result = Schema.Union(Success, Failure)
+
+type Result = Schema.Type<typeof Result>
+// { _tag: "Success"; value: string }
+// | { _tag: "Failure"; error: string }
+```
+
+### Pattern Matching with Tags
+
+```typescript
+import { Effect, Schema } from "effect"
+
+const handleResult = (result: Result) => {
+  switch (result._tag) {
+    case "Success":
+      return Effect.succeed(result.value)
+    case "Failure":
+      return Effect.fail(result.error)
+  }
+}
+```
+
+## Schema Classes
+
+### TaggedErrorClass
+
+Create error classes with schemas:
+
+```typescript
+import { Effect, Schema } from "effect"
+
+class ValidationError extends Schema.TaggedErrorClass<ValidationError>()("ValidationError", {
+  field: Schema.String,
+  message: Schema.String
+}) {}
+
+class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("NotFoundError", {
+  id: Schema.Number,
+  resource: Schema.String
+}) {}
+
+// Use in effects
+const findUser = (id: number) =>
+  Effect.gen(function* () {
+    const user = yield* getUserFromDb(id)
+    
+    if (!user) {
+      return yield* Effect.fail(
+        new NotFoundError({ id, resource: "User" })
+      )
+    }
+    
+    return user
+  })
+```
+
+### Error Handling with Tagged Errors
+
+```typescript
+import { Effect, Schema } from "effect"
+
+const program = Effect.gen(function* () {
+  const user = yield* findUser(123)
+  return user
+}).pipe(
+  Effect.catchTag("NotFoundError", (error) =>
+    Effect.gen(function* () {
+      yield* Effect.logWarning(
+        `${error.resource} with id ${error.id} not found`
+      )
+      return null
+    })
+  ),
+  Effect.catchTag("ValidationError", (error) =>
+    Effect.gen(function* () {
+      yield* Effect.logError(
+        `Validation failed for ${error.field}: ${error.message}`
+      )
+      return null
+    })
+  )
+)
+```
+
+## Class-Based Schemas
+
+### Schema Classes
+
+Create class instances with validation:
+
+```typescript
+import { Schema } from "effect"
+
+class User extends Schema.Class<User>("User", {
+  id: Schema.Number,
+  name: Schema.String,
+  email: Schema.String
+}) {
+  get displayName() {
+    return `${this.name} (${this.email})`
+  }
+}
+
+// Create instances with validation
+const user = new User({
+  id: 1,
+  name: "Alice",
+  email: "alice@example.com"
+})
+
+console.log(user.displayName)
+// "Alice (alice@example.com)"
+```
+
+### TaggedClass
+
+Classes with discriminator tags:
+
+```typescript
+import { Schema } from "effect"
+
+class CreateUserCommand extends Schema.TaggedClass<CreateUserCommand>()("CreateUser", {
+  name: Schema.String,
+  email: Schema.String
+}) {}
+
+class UpdateUserCommand extends Schema.TaggedClass<UpdateUserCommand>()("UpdateUser", {
+  id: Schema.Number,
+  name: Schema.optional(Schema.String),
+  email: Schema.optional(Schema.String)
+}) {}
+
+type Command = CreateUserCommand | UpdateUserCommand
+
+const handleCommand = (command: Command) => {
+  switch (command._tag) {
+    case "CreateUser":
+      return createUser(command.name, command.email)
+    case "UpdateUser":
+      return updateUser(command.id, command)
+  }
+}
+```
+
+## Advanced Features
+
+### Optional and Default Values
+
+```typescript
+import { Schema } from "effect"
+
+const User = Schema.Struct({
+  id: Schema.Number,
+  name: Schema.String,
+  email: Schema.String,
+  role: Schema.optional(Schema.String, { default: () => "user" }),
+  metadata: Schema.optional(Schema.Record(Schema.String, Schema.Unknown))
+})
+
+type User = Schema.Type<typeof User>
+// {
+//   id: number
+//   name: string
+//   email: string
+//   role: string // defaults to "user"
+//   metadata?: Record<string, unknown>
+// }
+```
+
+### Brand Types
+
+Create nominal types with brands:
+
+```typescript
+import { Brand, Schema } from "effect"
+
+type UserId = number & Brand.Brand<"UserId">
+const UserId = Schema.Number.pipe(Schema.brand("UserId"))
+
+type Email = string & Brand.Brand<"Email">
+const Email = Schema.String.pipe(
+  Schema.brand("Email"),
+  Schema.pattern(/^[^@]+@[^@]+\.[^@]+$/)
+)
+
+const User = Schema.Struct({
+  id: UserId,
+  email: Email
+})
+```
+
+### Recursive Schemas
+
+Define self-referential schemas:
+
+```typescript
+import { Schema } from "effect"
+
+interface Category {
+  id: number
+  name: string
+  parent?: Category
+}
+
+const Category: Schema.Schema<Category> = Schema.Struct({
+  id: Schema.Number,
+  name: Schema.String,
+  parent: Schema.optional(Schema.suspend(() => Category))
+})
+```
+
+## JSON Schema Generation
+
+Generate JSON Schema from Effect schemas:
+
+```typescript
+import { Schema } from "effect"
+
+const User = Schema.Struct({
+  id: Schema.Number,
+  name: Schema.String,
+  email: Schema.String
+})
+
+const jsonSchema = Schema.toJsonSchema(User)
+
+console.log(JSON.stringify(jsonSchema, null, 2))
+// {
+//   "type": "object",
+//   "properties": {
+//     "id": { "type": "number" },
+//     "name": { "type": "string" },
+//     "email": { "type": "string" }
+//   },
+//   "required": ["id", "name", "email"]
+// }
+```
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Define schemas close to usage">
+    Keep schema definitions near the code that uses them:
+    
+    ```typescript
+    // models/user.ts
+    export const User = Schema.Struct({
+      id: Schema.Number,
+      name: Schema.String
+    })
+    export type User = Schema.Type<typeof User>
+    ```
+  </Accordion>
+  
+  <Accordion title="Use TaggedErrorClass for errors">
+    Create typed error classes with schema validation:
+    
+    ```typescript
+    class ValidationError extends Schema.TaggedErrorClass<ValidationError>()()
+      ("ValidationError", { field: Schema.String })
+    {}
+    ```
+  </Accordion>
+  
+  <Accordion title="Compose schemas">
+    Build complex schemas from simpler ones:
+    
+    ```typescript
+    const Address = Schema.Struct({ street: Schema.String })
+    const User = Schema.Struct({ 
+      name: Schema.String,
+      address: Address 
+    })
+    ```
+  </Accordion>
+  
+  <Accordion title="Leverage transformations">
+    Use decodeTo for representing data differently:
+    
+    ```typescript
+    const DateFromString = Schema.String.decodeTo(Schema.Date, {
+      decode: (s) => new Date(s),
+      encode: (d) => d.toISOString()
+    })
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="SQL" icon="database" href="/data/sql">
+    Build type-safe SQL queries
+  </Card>
+  
+  <Card title="Caching" icon="bolt" href="/data/caching">
+    Cache validated data efficiently
+  </Card>
+</CardGroup>

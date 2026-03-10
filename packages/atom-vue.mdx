@@ -1,0 +1,409 @@
+---
+title: '@effect/atom-vue'
+description: 'Vue bindings for Effect Atom modules'
+icon: 'atom'
+---
+
+Vue bindings for Effect's Atom modules, enabling reactive state management with Effects in Vue applications.
+
+## Installation
+
+```bash
+pnpm add @effect/atom-vue vue effect
+```
+
+## Overview
+
+Effect Atoms provide a reactive state management solution that seamlessly integrates Effect programs with Vue 3. Atoms represent pieces of state that can be read, written, and derived from other atoms.
+
+## Basic Usage
+
+### Creating Atoms
+
+Create a simple atom with an initial value:
+
+```vue
+<script setup>
+import { Atom } from "effect/unstable/reactivity"
+import { useAtomValue } from "@effect/atom-vue"
+
+const countAtom = Atom.make(0)
+const count = useAtomValue(() => countAtom)
+</script>
+
+<template>
+  <div>Count: {{ count }}</div>
+</template>
+```
+
+### Reading and Writing Atoms
+
+Use `useAtom` to both read and write atom values:
+
+```vue
+<script setup>
+import { Atom } from "effect/unstable/reactivity"
+import { useAtom } from "@effect/atom-vue"
+
+const countAtom = Atom.make(0)
+const [count, setCount] = useAtom(() => countAtom)
+</script>
+
+<template>
+  <div>
+    <div>Count: {{ count }}</div>
+    <button @click="setCount(count + 1)">
+      Increment
+    </button>
+    <button @click="setCount((prev) => prev + 1)">
+      Increment (functional)
+    </button>
+  </div>
+</template>
+```
+
+## Derived Atoms
+
+Create atoms that derive their value from other atoms:
+
+```vue
+<script setup>
+import { Atom } from "effect/unstable/reactivity"
+import { useAtomValue } from "@effect/atom-vue"
+
+const countAtom = Atom.make(0)
+const doubleCountAtom = Atom.map(countAtom, (n) => n * 2)
+
+const double = useAtomValue(() => doubleCountAtom)
+</script>
+
+<template>
+  <div>Double: {{ double }}</div>
+</template>
+```
+
+## Async Atoms
+
+Atoms can contain Effect programs for async operations:
+
+```vue
+<script setup>
+import { Effect } from "effect"
+import { Atom, AsyncResult } from "effect/unstable/reactivity"
+import { useAtomValue } from "@effect/atom-vue"
+import { computed } from "vue"
+
+const userIdAtom = Atom.make(1)
+
+const userAtom = Atom.map(
+  userIdAtom,
+  (id) => Effect.promise(() =>
+    fetch(`https://api.example.com/users/${id}`).then(res => res.json())
+  )
+)
+
+const result = useAtomValue(() => userAtom)
+const user = computed(() => AsyncResult.getOrThrow(result.value))
+</script>
+
+<template>
+  <div>
+    <div v-if="AsyncResult.isLoading(result)">Loading...</div>
+    <div v-else-if="AsyncResult.isSuccess(result)">
+      {{ user.name }}
+    </div>
+    <div v-else>Error loading user</div>
+  </div>
+</template>
+```
+
+## Registry Provider
+
+Provide a custom registry to your Vue app:
+
+```ts
+import { createApp } from "vue"
+import { AtomRegistry } from "effect/unstable/reactivity"
+import { registryKey } from "@effect/atom-vue"
+import App from "./App.vue"
+
+const app = createApp(App)
+const registry = AtomRegistry.make()
+
+app.provide(registryKey, registry)
+app.mount("#app")
+```
+
+## Initial Values
+
+Provide initial values when creating the registry:
+
+```ts
+import { Atom, AtomRegistry } from "effect/unstable/reactivity"
+
+const themeAtom = Atom.make("light")
+
+const registry = AtomRegistry.make({
+  initialValues: [
+    Atom.initialValue(themeAtom, "dark")
+  ]
+})
+```
+
+## Effect Integration
+
+Atoms work seamlessly with Effect's runtime and layers:
+
+```vue
+<script setup>
+import { Effect, Layer, ServiceMap } from "effect"
+import { Atom, AsyncResult } from "effect/unstable/reactivity"
+import { useAtomValue } from "@effect/atom-vue"
+import { computed } from "vue"
+
+class ApiService extends ServiceMap.Service("ApiService")<
+  ApiService,
+  { fetch: (url: string) => Effect.Effect<unknown> }
+>() {
+  static Live = Layer.succeed(ApiService, {
+    fetch: (url) => Effect.promise(() => fetch(url).then(r => r.json()))
+  })
+}
+
+const runtime = Atom.runtime(ApiService.Live)
+
+const dataAtom = runtime.atom(
+  ApiService.use((api) =>
+    api.fetch("/api/data")
+  )
+)
+
+const result = useAtomValue(() => dataAtom)
+const data = computed(() => AsyncResult.getOrThrow(result.value))
+</script>
+
+<template>
+  <div v-if="AsyncResult.isSuccess(result)">
+    {{ JSON.stringify(data) }}
+  </div>
+  <div v-else>Loading...</div>
+</template>
+```
+
+## Atom Families
+
+Create parameterized atoms:
+
+```vue
+<script setup>
+import { ref } from "vue"
+import { Atom } from "effect/unstable/reactivity"
+import { useAtomValue } from "@effect/atom-vue"
+
+const userAtomFamily = (userId: number) =>
+  Atom.make(
+    Effect.promise(() =>
+      fetch(`/api/users/${userId}`).then(r => r.json())
+    )
+  )
+
+const userId = ref(1)
+const user = useAtomValue(() => userAtomFamily(userId.value))
+</script>
+
+<template>
+  <div>
+    <button @click="userId++">Next User</button>
+    <div v-if="AsyncResult.isSuccess(user)">
+      {{ user.value.name }}
+    </div>
+  </div>
+</template>
+```
+
+## Working with AsyncResult
+
+Handle different states of async atoms:
+
+```vue
+<script setup>
+import { AsyncResult } from "effect/unstable/reactivity"
+import { useAtomValue } from "@effect/atom-vue"
+
+const result = useAtomValue(() => dataAtom)
+</script>
+
+<template>
+  <div>
+    <div v-if="AsyncResult.isLoading(result)">Loading...</div>
+    <div v-else-if="AsyncResult.isSuccess(result)">
+      Success: {{ result.value }}
+    </div>
+    <div v-else-if="AsyncResult.isFailure(result)">
+      Error: {{ result.error }}
+    </div>
+  </div>
+</template>
+```
+
+## Promise Mode
+
+Get promises from atom updates:
+
+```vue
+<script setup>
+import { Atom } from "effect/unstable/reactivity"
+import { useAtom } from "@effect/atom-vue"
+
+const dataAtom = Atom.make(
+  Effect.promise(() => fetch("/api/data").then(r => r.json()))
+)
+
+const [data, setData] = useAtom(() => dataAtom, { mode: "promise" })
+
+const handleSubmit = async () => {
+  try {
+    const result = await setData(newValue)
+    console.log("Success:", result)
+  } catch (error) {
+    console.error("Error:", error)
+  }
+}
+</script>
+
+<template>
+  <button @click="handleSubmit">Submit</button>
+</template>
+```
+
+## Composables Reference
+
+### useAtomValue
+
+Read an atom's value as a Vue ref:
+
+```ts
+const value = useAtomValue(() => atom)
+```
+
+### useAtom
+
+Read and write an atom:
+
+```ts
+const [value, setValue] = useAtom(() => atom)
+const [value, setValue] = useAtom(() => atom, { mode: "promise" })
+const [value, setValue] = useAtom(() => atom, { mode: "promiseExit" })
+```
+
+### useAtomSet
+
+Get only the setter function:
+
+```ts
+const setValue = useAtomSet(() => atom)
+const setValue = useAtomSet(() => atom, { mode: "promise" })
+```
+
+### useAtomRef
+
+Use with AtomRef:
+
+```ts
+const value = useAtomRef(() => atomRef)
+```
+
+### injectRegistry
+
+Get the current atom registry:
+
+```ts
+const registry = injectRegistry()
+```
+
+## Best Practices
+
+1. **Use Functions**: Always pass atoms as functions to composables: `useAtomValue(() => atom)`
+2. **Atom Granularity**: Create small, focused atoms rather than large state objects
+3. **Derived State**: Use derived atoms instead of computed properties when possible
+4. **Async Operations**: Use AsyncResult helper functions for proper state handling
+5. **Registry Injection**: Provide registry at app level for consistency
+6. **TypeScript**: Enable strict mode for better type inference
+
+## Vue-Specific Features
+
+### Reactive Atoms
+
+Vue's reactivity system works seamlessly with atoms:
+
+```vue
+<script setup>
+import { ref } from "vue"
+import { Atom } from "effect/unstable/reactivity"
+import { useAtomValue } from "@effect/atom-vue"
+
+const userId = ref(1)
+const user = useAtomValue(() => userAtomFamily(userId.value))
+</script>
+
+<template>
+  <div>
+    <input v-model.number="userId" type="number" />
+    <div>{{ user }}</div>
+  </div>
+</template>
+```
+
+### Cleanup
+
+Atoms automatically clean up when components unmount:
+
+```vue
+<script setup>
+import { onBeforeUnmount } from "vue"
+import { useAtomValue } from "@effect/atom-vue"
+
+const value = useAtomValue(() => dataAtom)
+
+onBeforeUnmount(() => {
+  console.log("Component unmounting, atom subscription cleaned up")
+})
+</script>
+```
+
+### Composition API
+
+Create reusable atom composables:
+
+```ts
+import { Atom } from "effect/unstable/reactivity"
+import { useAtomValue } from "@effect/atom-vue"
+
+export function useUser(userId: Ref<number>) {
+  const userAtom = computed(() => userAtomFamily(userId.value))
+  const result = useAtomValue(() => userAtom.value)
+  
+  const user = computed(() => 
+    AsyncResult.isSuccess(result.value) 
+      ? result.value.value 
+      : null
+  )
+  
+  return { user, loading: computed(() => AsyncResult.isLoading(result.value)) }
+}
+```
+
+## API Modules
+
+- **AtomRegistry**: Re-exported from effect
+- **AsyncResult**: Re-exported from effect
+- **Atom**: Re-exported from effect
+- **AtomRef**: Re-exported from effect
+- **AtomHttpApi**: Re-exported from effect
+- **AtomRpc**: Re-exported from effect
+
+## Related Packages
+
+- [@effect/atom-react](/packages/atom-react)
+- [@effect/atom-solid](/packages/atom-solid)
+- [@effect/vitest](/packages/vitest)

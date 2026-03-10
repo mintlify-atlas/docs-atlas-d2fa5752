@@ -1,0 +1,266 @@
+---
+title: Array
+---
+
+Utilities for working with immutable arrays in a functional style. All functions treat arrays as immutable — they return new arrays rather than mutating the input.
+
+## Mental Model
+
+- **`Array<A>`** is a standard JS array. All functions return new arrays; the input is never mutated.
+- **`NonEmptyArray<A>`** is `[A, ...Array<A>]` — guaranteed to have at least one element.
+- Most functions are **dual** — callable as `Array.fn(array, arg)` (data-first) or `pipe(array, Array.fn(arg))` (data-last).
+- Functions that access elements by index return `Option<A>` for safety.
+- Set-like operations use `Equal.equivalence()` by default; use `*With` variants for custom equality.
+
+## Key Operations
+
+### Create
+
+Build arrays from values, ranges, or generators:
+
+```ts
+import { Array } from "effect"
+
+// From elements
+const numbers = Array.make(1, 2, 3, 4, 5)
+
+// Range (inclusive)
+const range = Array.range(1, 5) // [1, 2, 3, 4, 5]
+
+// Generate from function
+const squares = Array.makeBy(5, (i) => i * i) // [0, 1, 4, 9, 16]
+
+// Repeat a value
+const repeated = Array.replicate("x", 3) // ["x", "x", "x"]
+
+// From iterable
+const fromSet = Array.fromIterable(new Set([1, 2, 3]))
+```
+
+### Access
+
+Safely retrieve elements with `Option`:
+
+```ts
+import { Array, Option } from "effect"
+
+const numbers = Array.make(1, 2, 3)
+
+// Safe access
+const first = Array.head(numbers) // Option.some(1)
+const second = Array.get(numbers, 1) // Option.some(2)
+const outOfBounds = Array.get(numbers, 10) // Option.none()
+
+// For non-empty arrays
+const firstNonEmpty = Array.headNonEmpty([1, 2, 3]) // 1 (no Option)
+```
+
+### Transform
+
+Map, filter, and flatMap over arrays:
+
+```ts
+import { Array } from "effect"
+
+const numbers = Array.make(1, 2, 3, 4, 5)
+
+// Map
+const doubled = Array.map(numbers, (n) => n * 2) // [2, 4, 6, 8, 10]
+
+// Filter
+const evens = Array.filter(numbers, (n) => n % 2 === 0) // [2, 4]
+
+// FlatMap
+const duplicated = Array.flatMap(numbers, (n) => [n, n]) // [1, 1, 2, 2, 3, 3, ...]
+```
+
+### Combine
+
+Join arrays together:
+
+```ts
+import { Array } from "effect"
+
+const a = Array.make(1, 2)
+const b = Array.make(3, 4)
+
+// Concatenate
+const combined = Array.appendAll(a, b) // [1, 2, 3, 4]
+
+// Prepend/append single elements
+const withZero = Array.prepend(a, 0) // [0, 1, 2]
+const withFive = Array.append(a, 5) // [1, 2, 5]
+
+// Zip (pair elements)
+const pairs = Array.zip(a, b) // [[1, 3], [2, 4]]
+```
+
+### Split
+
+Divide arrays into parts:
+
+```ts
+import { Array } from "effect"
+
+const numbers = Array.make(1, 2, 3, 4, 5, 6)
+
+// Take/drop
+const first3 = Array.take(numbers, 3) // [1, 2, 3]
+const rest = Array.drop(numbers, 3) // [4, 5, 6]
+
+// Split at index
+const [left, right] = Array.splitAt(numbers, 3) // [[1, 2, 3], [4, 5, 6]]
+
+// Split into chunks
+const chunks = Array.chunksOf(numbers, 2) // [[1, 2], [3, 4], [5, 6]]
+
+// While predicate holds
+const [prefix, suffix] = Array.span(numbers, (n) => n < 4) // [[1, 2, 3], [4, 5, 6]]
+```
+
+### Search
+
+Locate elements:
+
+```ts
+import { Array, Option } from "effect"
+
+const numbers = Array.make(1, 2, 3, 4, 5)
+
+// Find first matching
+const found = Array.findFirst(numbers, (n) => n > 3) // Option.some(4)
+
+// Find last matching
+const last = Array.findLast(numbers, (n) => n % 2 === 0) // Option.some(4)
+
+// Check if contains
+const hasThree = Array.contains(numbers, 3) // true
+```
+
+### Fold
+
+Reduce to a single value:
+
+```ts
+import { Array } from "effect"
+
+const numbers = Array.make(1, 2, 3, 4, 5)
+
+// Left fold
+const sum = Array.reduce(numbers, 0, (acc, n) => acc + n) // 15
+
+// Scan (keep intermediate results)
+const cumulative = Array.scan(numbers, 0, (acc, n) => acc + n)
+// [0, 1, 3, 6, 10, 15]
+
+// Join to string
+const joined = Array.join(Array.make("a", "b", "c"), "-") // "a-b-c"
+```
+
+### Sort
+
+Order elements:
+
+```ts
+import { Array, Order } from "effect"
+
+const numbers = Array.make(3, 1, 4, 1, 5)
+const sorted = Array.sort(numbers, Order.number) // [1, 1, 3, 4, 5]
+
+// Sort by projection
+interface Person { name: string; age: number }
+const people: Array<Person> = [...]
+
+const byAge = Array.sortBy(people, (p) => p.age, Order.number)
+const byName = Array.sortBy(people, (p) => p.name, Order.string)
+```
+
+### Group
+
+Organize elements:
+
+```ts
+import { Array } from "effect"
+
+const numbers = Array.make(1, 2, 3, 4, 5, 6)
+
+// Group by predicate
+const [evens, odds] = Array.partition(numbers, (n) => n % 2 === 0)
+// [[2, 4, 6], [1, 3, 5]]
+
+// Group by key
+const grouped = Array.groupBy(numbers, (n) => n % 3)
+// { 0: [3, 6], 1: [1, 4], 2: [2, 5] }
+```
+
+### Set Operations
+
+Treat arrays as sets:
+
+```ts
+import { Array } from "effect"
+
+const a = Array.make(1, 2, 3)
+const b = Array.make(2, 3, 4)
+
+// Union
+const all = Array.union(a, b) // [1, 2, 3, 4]
+
+// Intersection
+const common = Array.intersection(a, b) // [2, 3]
+
+// Difference
+const unique = Array.difference(a, b) // [1]
+
+// Remove duplicates
+const deduped = Array.dedupe(Array.make(1, 2, 2, 3, 3, 3)) // [1, 2, 3]
+```
+
+## Type Signatures
+
+```ts
+// Core types
+type NonEmptyArray<A> = [A, ...Array<A>]
+type NonEmptyReadonlyArray<A> = readonly [A, ...Array<A>]
+
+// Creation
+const make: <As extends readonly [any, ...Array<any>]>(...as: As) => NonEmptyArray<As[number]>
+const range: (start: number, end: number) => NonEmptyArray<number>
+const makeBy: {
+  <A>(f: (i: number) => A): (n: number) => NonEmptyArray<A>
+  <A>(n: number, f: (i: number) => A): NonEmptyArray<A>
+}
+
+// Access
+const head: <A>(self: ReadonlyArray<A>) => Option<A>
+const get: {
+  (index: number): <A>(self: ReadonlyArray<A>) => Option<A>
+  <A>(self: ReadonlyArray<A>, index: number): Option<A>
+}
+
+// Transform
+const map: {
+  <A, B>(f: (a: A, i: number) => B): (self: ReadonlyArray<A>) => Array<B>
+  <A, B>(self: ReadonlyArray<A>, f: (a: A, i: number) => B): Array<B>
+}
+const filter: {
+  <A, B extends A>(refinement: (a: A, i: number) => a is B): (self: ReadonlyArray<A>) => Array<B>
+  <A>(predicate: (a: A, i: number) => boolean): (self: ReadonlyArray<A>) => Array<A>
+}
+const flatMap: {
+  <A, B>(f: (a: A, i: number) => ReadonlyArray<B>): (self: ReadonlyArray<A>) => Array<B>
+  <A, B>(self: ReadonlyArray<A>, f: (a: A, i: number) => ReadonlyArray<B>): Array<B>
+}
+
+// Fold
+const reduce: {
+  <B, A>(b: B, f: (b: B, a: A, i: number) => B): (self: ReadonlyArray<A>) => B
+  <A, B>(self: ReadonlyArray<A>, b: B, f: (b: B, a: A, i: number) => B): B
+}
+```
+
+## See Also
+
+- [Chunk](/api/chunk) — Immutable sequence with O(1) append
+- [List](/api/list) — Persistent linked list
+- [HashMap](/api/hashmap) — Immutable key-value map

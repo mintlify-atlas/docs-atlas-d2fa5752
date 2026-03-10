@@ -1,97 +1,141 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
+title: "Effect v4"
+description: "The missing standard library for TypeScript, for writing production-grade software."
 ---
 
-## Setting up
+<div style={{
+  background: 'linear-gradient(135deg, #94cb04 0%, #545454 100%)',
+  padding: '4rem 2rem',
+  borderRadius: '8px',
+  marginBottom: '3rem',
+  textAlign: 'center'
+}}>
+  <h1 style={{
+    fontSize: '3rem',
+    fontWeight: '700',
+    color: '#ffffff',
+    marginBottom: '1rem',
+    fontFamily: 'Inter, sans-serif'
+  }}>Effect v4</h1>
+  <p style={{
+    fontSize: '1.25rem',
+    color: '#ffffff',
+    maxWidth: '800px',
+    margin: '0 auto',
+    fontFamily: 'Inter, sans-serif',
+    lineHeight: '1.8'
+  }}>
+    The missing standard library for TypeScript, for writing production-grade software. Type-safe functional programming with built-in error handling, structured concurrency, and observability.
+  </p>
+</div>
 
-Get your documentation site up and running in minutes.
+## Get Started
 
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
+Get up and running with Effect in minutes.
+
+<CardGroup cols={2}>
+  <Card title="Installation" icon="download" href="/installation">
+    Install Effect and set up your development environment
+  </Card>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Build your first Effect program in 5 minutes
+  </Card>
+  <Card title="Core Concepts" icon="book" href="/concepts/effect">
+    Learn the fundamentals of Effect programming
+  </Card>
+  <Card title="API Reference" icon="code" href="/api/effect">
+    Explore the complete API documentation
+  </Card>
+</CardGroup>
+
+## Key Features
+
+Effect provides everything you need for production TypeScript development.
+
+<CardGroup cols={2}>
+  <Card title="Type-Safe Error Handling" icon="shield-check">
+    Built-in error channels with compile-time guarantees. Define custom errors with Schema.TaggedErrorClass and handle them with Effect.catchTag.
+  </Card>
+  <Card title="Structured Concurrency" icon="sitemap">
+    Manage concurrent operations safely with Fibers. Automatic cleanup and resource management with Effect.acquireRelease.
+  </Card>
+  <Card title="Dependency Injection" icon="plug">
+    Build modular applications with Layer and ServiceMap.Service. Testable, composable service architecture.
+  </Card>
+  <Card title="Observability Built-in" icon="chart-line">
+    Structured logging, distributed tracing, and metrics out of the box. Export to OpenTelemetry with minimal configuration.
+  </Card>
+  <Card title="HTTP Client & Server" icon="globe">
+    Schema-first HTTP APIs with HttpApi. Type-safe clients, runtime validation, and automatic OpenAPI documentation.
+  </Card>
+  <Card title="Streaming Data" icon="water">
+    Pull-based Streams for processing finite or infinite data sources. Transform, filter, and consume with composable operators.
+  </Card>
+  <Card title="SQL Integrations" icon="database">
+    First-class SQL support for PostgreSQL, MySQL, SQL Server, ClickHouse, and more with type-safe query building.
+  </Card>
+  <Card title="AI/LLM Integration" icon="brain">
+    Provider-agnostic AI modules for Anthropic, OpenAI, and OpenRouter. Generate text, decode structured objects, and stream responses.
+  </Card>
+</CardGroup>
+
+## Popular Guides
+
+Learn how to use Effect for common tasks.
+
+<CardGroup cols={2}>
+  <Card title="Running Effects" icon="play" href="/guides/running-effects">
+    Execute Effect programs with NodeRuntime and BunRuntime
+  </Card>
+  <Card title="Testing" icon="flask" href="/guides/testing">
+    Write Effect tests with @effect/vitest
+  </Card>
+  <Card title="Observability" icon="eye" href="/guides/observability">
+    Set up logging, tracing, and metrics for production
+  </Card>
+  <Card title="HTTP Client" icon="arrow-right-arrow-left" href="/http/client">
+    Build HTTP clients with schema validation
+  </Card>
+</CardGroup>
+
+## Effect v4 Highlights
+
+<Note>
+Effect v4 is currently in beta. This is a major release with significant improvements to performance, bundle size, and developer experience.
+</Note>
+
+<CardGroup cols={2}>
+  <Card title="Unified Versioning" icon="tag">
+    All Effect packages now share a single version number. No more compatibility confusion between packages.
+  </Card>
+  <Card title="Consolidated Packages" icon="boxes-stacked">
+    Core functionality from @effect/platform, @effect/rpc, and @effect/cluster is now built into the main effect package.
+  </Card>
+  <Card title="Smaller Bundles" icon="feather">
+    Aggressive tree-shaking support. A minimal Effect program bundles to ~6.3 KB (minified + gzipped).
+  </Card>
+  <Card title="Faster Runtime" icon="gauge-high">
+    Rewritten fiber runtime with reduced memory overhead and improved execution speed.
+  </Card>
+</CardGroup>
+
+## Migration from v3
+
+<Warning>
+Breaking changes between v3 and v4. Review the migration guide before upgrading existing projects.
+</Warning>
+
+<Card title="Migration Guide" icon="arrow-right" href="/migration/v3-to-v4">
+  Step-by-step guide for migrating from Effect v3 to v4
 </Card>
 
-## Make it yours
+## Community & Support
 
-Design a docs site that looks great and empowers your users.
-
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
+<CardGroup cols={2}>
+  <Card title="GitHub" icon="github" href="https://github.com/Effect-TS/effect-smol">
+    View source code and contribute
   </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
+  <Card title="Discord" icon="discord" href="https://discord.gg/effect-ts">
+    Join the Effect community
   </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
-  </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
-  </Card>
-</Columns>
-
-## Create beautiful pages
-
-Everything you need to create world-class documentation.
-
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
-  </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
-  </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
-  </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
-  </Card>
-</Columns>
-
-## Need inspiration?
-
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+</CardGroup>

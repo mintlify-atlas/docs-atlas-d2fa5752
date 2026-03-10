@@ -1,0 +1,273 @@
+---
+title: Services
+description: Learn how to define and use services in Effect v4 for modular, testable code
+---
+
+Services are the primary way to structure Effect applications. They encapsulate behavior, ensure modularity, and make your code testable by allowing dependencies to be easily swapped.
+
+## What is a Service?
+
+A service is a collection of related functionality that can be provided to your Effect program through the environment. Services promote:
+
+- **Modularity**: Each service has a clear, focused responsibility
+- **Testability**: Services can be easily mocked or replaced for testing
+- **Dependency Management**: Services explicitly declare their dependencies
+- **Type Safety**: Service dependencies are tracked in the type system
+
+<Info>
+  Prefer using services to encapsulate behavior over other approaches, as it ensures that your code is modular, testable, and maintainable.
+</Info>
+
+## Defining Services with ServiceMap.Service
+
+The default way to define a service is to extend `ServiceMap.Service`, passing in the service interface as a type parameter:
+
+```typescript
+import { Effect, Layer, Schema, ServiceMap } from "effect"
+
+class DatabaseError extends Schema.TaggedErrorClass<DatabaseError>()("DatabaseError", {
+  cause: Schema.Defect
+}) {}
+
+// Pass in the service class name as the first type parameter, and the service
+// interface as the second type parameter.
+export class Database extends ServiceMap.Service<Database, {
+  query(sql: string): Effect.Effect<Array<unknown>, DatabaseError>
+}>()()
+  // The string identifier for the service, which should include the package
+  // name and the subdirectory path to the service file.
+  "myapp/db/Database"
+) {
+  // Attach a static layer to the service, which will be used to provide an
+  // implementation of the service.
+  static readonly layer = Layer.effect(
+    Database,
+    Effect.gen(function*() {
+      // Define the service methods using Effect.fn
+      const query = Effect.fn("Database.query")(function*(sql: string) {
+        yield* Effect.log("Executing SQL query:", sql)
+        return [{ id: 1, name: "Alice" }, { id: 2, name: "Bob" }]
+      })
+
+      // Return an instance of the service using Database.of, passing in an
+      // object that implements the service interface.
+      return Database.of({
+        query
+      })
+    })
+  )
+}
+
+// If you ever need to access the service type, use `Database["Service"]`
+export type DatabaseService = Database["Service"]
+```
+
+### Service Definition Anatomy
+
+<Steps>
+  <Step title="Extend ServiceMap.Service">
+    Pass your service class and interface as type parameters
+  </Step>
+  <Step title="Provide a unique identifier">
+    Use a string like `"package/path/ServiceName"` to uniquely identify your service
+  </Step>
+  <Step title="Attach a static layer">
+    Define how to construct your service in a `static readonly layer` property
+  </Step>
+  <Step title="Implement service methods">
+    Use `Effect.fn` for each method to get better stack traces and automatic tracing
+  </Step>
+  <Step title="Return with .of()">
+    Use `ServiceName.of({ ...methods })` to create the service instance
+  </Step>
+</Steps>
+
+## Using Services
+
+Once defined, you can use a service in your Effect code by yielding it:
+
+```typescript
+import { Effect } from "effect"
+
+const program = Effect.gen(function*() {
+  // Acquire the Database service from the environment
+  const db = yield* Database
+  
+  // Use the service methods
+  const results = yield* db.query("SELECT * FROM users")
+  
+  yield* Effect.log("Found users:", results)
+  return results
+})
+
+// The program requires Database in its environment
+// Type: Effect<Array<unknown>, DatabaseError, Database>
+```
+
+<Note>
+  The service dependency is tracked in the type signature. You'll see `Database` in the requirements type parameter.
+</Note>
+
+## Configuration Services with ServiceMap.Reference
+
+For configuration values, feature flags, or any service that has a default value, use `ServiceMap.Reference`:
+
+```typescript
+import { ServiceMap } from "effect"
+
+export const FeatureFlag = ServiceMap.Reference<boolean>("myapp/FeatureFlag", {
+  defaultValue: () => false
+})
+```
+
+This creates a simple reference service that can be overridden but has a sensible default.
+
+## Building Service Layers
+
+Services often depend on other services. Here's how to compose them:
+
+```typescript
+import { PgClient } from "@effect/sql-pg"
+import { Array, Config, Effect, Layer, type Option, Schema, ServiceMap } from "effect"
+import { SqlClient, SqlError } from "effect/unstable/sql"
+
+// Define a layer for the SqlClient service
+export const SqlClientLayer: Layer.Layer<
+  PgClient.PgClient | SqlClient.SqlClient,
+  Config.ConfigError | SqlError.SqlError
+> = PgClient.layerConfig({
+  url: Config.redacted("DATABASE_URL")
+})
+
+class UserRepositoryError extends Schema.TaggedErrorClass<UserRepositoryError>()("UserRepositoryError", {
+  reason: SqlError.SqlError
+}) {}
+
+export class UserRepository extends ServiceMap.Service<UserRepository, {
+  findById(id: string): Effect.Effect<
+    Option.Option<{ readonly id: string; readonly name: string }>,
+    UserRepositoryError
+  >
+}>()("myapp/UserRepository") {
+  // Implement the layer for the UserRepository service, which depends on the
+  // SqlClient service
+  static readonly layerNoDeps: Layer.Layer<
+    UserRepository,
+    never,
+    SqlClient.SqlClient
+  > = Layer.effect(
+    UserRepository,
+    Effect.gen(function*() {
+      const sql = yield* SqlClient.SqlClient
+
+      const findById = Effect.fn("UserRepository.findById")(function*(id: string) {
+        const results = yield* sql<{
+          readonly id: string
+          readonly name: string
+        }>`SELECT * FROM users WHERE id = '${id}'`
+        return Array.head(results)
+      }, Effect.mapError((reason) => new UserRepositoryError({ reason })))
+
+      return UserRepository.of({ findById })
+    })
+  )
+
+  // Use Layer.provide to compose the UserRepository layer with the SqlClient
+  // layer, exposing only the UserRepository service
+  static readonly layer: Layer.Layer<
+    UserRepository,
+    Config.ConfigError | SqlError.SqlError
+  > = this.layerNoDeps.pipe(
+    Layer.provide(SqlClientLayer)
+  )
+
+  // Use Layer.provideMerge to compose the UserRepository layer with the SqlClient
+  // layer, exposing both the UserRepository and SqlClient services
+  static readonly layerWithSqlClient: Layer.Layer<
+    UserRepository | SqlClient.SqlClient,
+    Config.ConfigError | SqlError.SqlError
+  > = this.layerNoDeps.pipe(
+    Layer.provideMerge(SqlClientLayer)
+  )
+}
+```
+
+### Layer Composition Strategies
+
+<Accordion title="Layer.provide - Hide Dependencies">
+  Use `Layer.provide` when you want to hide implementation details. Only the outer service is exposed:
+  
+  ```typescript
+  static readonly layer = this.layerNoDeps.pipe(
+    Layer.provide(SqlClientLayer)
+  )
+  // Exposes: UserRepository
+  // Hides: SqlClient
+  ```
+</Accordion>
+
+<Accordion title="Layer.provideMerge - Expose Dependencies">
+  Use `Layer.provideMerge` when you want to expose both the service and its dependencies:
+  
+  ```typescript
+  static readonly layerWithSqlClient = this.layerNoDeps.pipe(
+    Layer.provideMerge(SqlClientLayer)
+  )
+  // Exposes: UserRepository | SqlClient
+  ```
+</Accordion>
+
+## Best Practices
+
+<Tip>
+  **Service Naming Convention**: Use the pattern `"package/path/ServiceName"` for service identifiers to avoid conflicts.
+</Tip>
+
+<Tip>
+  **Method Naming**: Use `Effect.fn("ServiceName.methodName")` for better stack traces and automatic tracing spans.
+</Tip>
+
+<Tip>
+  **Layering Strategy**: Create both `layerNoDeps` (with dependencies) and `layer` (without dependencies) to give users flexibility.
+</Tip>
+
+<Warning>
+  Always wrap service errors in tagged error classes to maintain type safety and enable proper error handling.
+</Warning>
+
+## Testing Services
+
+Services make testing easy by allowing you to provide mock implementations:
+
+```typescript
+import { Effect, Layer } from "effect"
+
+// Create a test layer with mock implementation
+const TestDatabaseLayer = Layer.succeed(
+  Database,
+  Database.of({
+    query: Effect.fn("Database.query")(() => 
+      Effect.succeed([{ id: 1, name: "Test User" }])
+    )
+  })
+)
+
+// Use in tests
+const testProgram = program.pipe(
+  Effect.provide(TestDatabaseLayer)
+)
+```
+
+## Next Steps
+
+<Steps>
+  <Step title="Understand Layers">
+    Learn more about layer composition in [Layers](/concepts/layers)
+  </Step>
+  <Step title="Handle Errors">
+    Master error handling patterns in [Error Handling](/concepts/error-handling)
+  </Step>
+  <Step title="Manage Resources">
+    Learn about resource cleanup in [Resources](/concepts/resources)
+  </Step>
+</Steps>

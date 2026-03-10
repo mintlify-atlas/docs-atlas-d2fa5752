@@ -1,122 +1,210 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "mint",
-  "name": "Mint Starter Kit",
+  "name": "Effect",
+  "theme": "palm",
   "colors": {
-    "primary": "#16A34A",
-    "light": "#07C983",
-    "dark": "#15803D"
+    "primary": "#94cb04",
+    "light": "#545454",
+    "dark": "#94cb04"
   },
   "favicon": "/favicon.svg",
+  "logo": {
+    "light": "/logo.png",
+    "dark": "/logo.png"
+  },
+  "navbar": {
+    "primary": {
+      "type": "github",
+      "href": "https://github.com/Effect-TS/effect-smol"
+    }
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/Effect-TS/effect-smol"
+    }
+  },
   "navigation": {
     "tabs": [
       {
-        "tab": "Guides",
+        "tab": "Documentation",
         "groups": [
           {
-            "group": "Getting started",
+            "group": "Get Started",
             "pages": [
-              "index",
-              "quickstart",
-              "development"
+              "introduction",
+              "installation",
+              "quickstart"
             ]
           },
           {
-            "group": "Customization",
+            "group": "Core Concepts",
             "pages": [
-              "essentials/settings",
-              "essentials/navigation"
+              "concepts/effect",
+              "concepts/services",
+              "concepts/layers",
+              "concepts/error-handling",
+              "concepts/resources"
             ]
           },
           {
-            "group": "Writing content",
+            "group": "Guides",
             "pages": [
-              "essentials/markdown",
-              "essentials/code",
-              "essentials/images",
-              "essentials/reusable-snippets"
+              "guides/running-effects",
+              "guides/testing",
+              "guides/observability",
+              "guides/streaming",
+              "guides/concurrency"
             ]
           },
           {
-            "group": "AI tools",
+            "group": "HTTP",
             "pages": [
-              "ai-tools/cursor",
-              "ai-tools/claude-code",
-              "ai-tools/windsurf"
+              "http/client",
+              "http/server",
+              "http/api"
+            ]
+          },
+          {
+            "group": "Data & Persistence",
+            "pages": [
+              "data/sql",
+              "data/schema",
+              "data/caching"
+            ]
+          },
+          {
+            "group": "AI & LLM",
+            "pages": [
+              "ai/overview",
+              "ai/language-models",
+              "ai/tools-chat"
+            ]
+          },
+          {
+            "group": "Advanced",
+            "pages": [
+              "advanced/cli",
+              "advanced/cluster",
+              "advanced/batching",
+              "advanced/child-processes"
+            ]
+          },
+          {
+            "group": "Migration",
+            "pages": [
+              "migration/v3-to-v4",
+              "migration/services",
+              "migration/schema"
             ]
           }
         ]
       },
       {
-        "tab": "API reference",
+        "tab": "API Reference",
         "groups": [
           {
-            "group": "API documentation",
+            "group": "Core Modules",
             "pages": [
-              "api-reference/introduction"
+              "api/effect",
+              "api/layer",
+              "api/stream",
+              "api/schema",
+              "api/config"
             ]
           },
           {
-            "group": "Endpoint examples",
+            "group": "Data Structures",
             "pages": [
-              "api-reference/endpoint/get",
-              "api-reference/endpoint/create",
-              "api-reference/endpoint/delete",
-              "api-reference/endpoint/webhook"
+              "api/array",
+              "api/hashmap",
+              "api/hashset",
+              "api/chunk",
+              "api/option",
+              "api/result"
+            ]
+          },
+          {
+            "group": "Concurrency",
+            "pages": [
+              "api/fiber",
+              "api/queue",
+              "api/pubsub",
+              "api/deferred",
+              "api/semaphore"
+            ]
+          },
+          {
+            "group": "Time & Scheduling",
+            "pages": [
+              "api/clock",
+              "api/datetime",
+              "api/duration",
+              "api/schedule",
+              "api/cron"
+            ]
+          },
+          {
+            "group": "Platform",
+            "pages": [
+              "api/filesystem",
+              "api/http-client",
+              "api/http-server",
+              "api/worker"
+            ]
+          },
+          {
+            "group": "Unstable Modules",
+            "pages": [
+              "api/unstable/ai",
+              "api/unstable/cli",
+              "api/unstable/cluster",
+              "api/unstable/sql",
+              "api/unstable/process"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Packages",
+        "groups": [
+          {
+            "group": "Platform Packages",
+            "pages": [
+              "packages/platform-node",
+              "packages/platform-bun",
+              "packages/platform-browser"
+            ]
+          },
+          {
+            "group": "SQL Drivers",
+            "pages": [
+              "packages/sql-pg",
+              "packages/sql-mysql2",
+              "packages/sql-mssql",
+              "packages/sql-clickhouse",
+              "packages/sql-libsql"
+            ]
+          },
+          {
+            "group": "AI Providers",
+            "pages": [
+              "packages/ai-anthropic",
+              "packages/ai-openai",
+              "packages/ai-openrouter"
+            ]
+          },
+          {
+            "group": "Integrations",
+            "pages": [
+              "packages/opentelemetry",
+              "packages/vitest",
+              "packages/atom-react",
+              "packages/atom-solid",
+              "packages/atom-vue"
             ]
           }
         ]
       }
-    ],
-    "global": {
-      "anchors": [
-        {
-          "anchor": "Documentation",
-          "href": "https://mintlify.com/docs",
-          "icon": "book-open-cover"
-        },
-        {
-          "anchor": "Blog",
-          "href": "https://mintlify.com/blog",
-          "icon": "newspaper"
-        }
-      ]
-    }
-  },
-  "logo": {
-    "light": "/logo/light.svg",
-    "dark": "/logo/dark.svg"
-  },
-  "navbar": {
-    "links": [
-      {
-        "label": "Support",
-        "href": "mailto:hi@mintlify.com"
-      }
-    ],
-    "primary": {
-      "type": "button",
-      "label": "Dashboard",
-      "href": "https://dashboard.mintlify.com"
-    }
-  },
-  "contextual": {
-    "options": [
-     "copy",
-     "view",
-     "chatgpt",
-     "claude",
-     "perplexity",
-     "mcp",
-     "cursor",
-     "vscode"
-   ]
-  },
-  "footer": {
-    "socials": {
-      "x": "https://x.com/mintlify",
-      "github": "https://github.com/mintlify",
-      "linkedin": "https://linkedin.com/company/mintlify"
-    }
+    ]
   }
 }

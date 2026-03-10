@@ -1,0 +1,277 @@
+---
+title: "Request Batching"
+description: "Optimize external API calls by batching multiple requests into fewer operations"
+icon: "layer-group"
+---
+
+Request batching combines multiple concurrent requests into fewer external calls, reducing latency and improving throughput. Effect's `RequestResolver` automatically batches requests that occur within a configurable time window.
+
+## Request classes
+
+Define request types using `Request.Class` to model external lookups.
+
+```typescript
+import { Request, Schema } from "effect"
+
+export class User extends Schema.Class<User>("User")({
+  id: Schema.Number,
+  name: Schema.String,
+  email: Schema.String
+}) {}
+
+export class UserNotFound extends Schema.TaggedErrorClass<UserNotFound>()("UserNotFound", {
+  id: Schema.Number
+}) {}
+
+class GetUserById extends Request.Class<
+  { readonly id: number },
+  User,          // Success type
+  UserNotFound,  // Error type
+  never          // Requirements type
+> {}
+```
+
+Each request represents a single lookup operation with typed success and error cases.
+
+## Creating resolvers
+
+Resolvers process batches of requests and complete them with results.
+
+```typescript
+import { Effect, Exit, RequestResolver } from "effect"
+
+// Simulate a data source
+const usersTable = new Map<number, User>([
+  [1, new User({ id: 1, name: "Ada Lovelace", email: "ada@acme.dev" })],
+  [2, new User({ id: 2, name: "Alan Turing", email: "alan@acme.dev" })],
+  [3, new User({ id: 3, name: "Grace Hopper", email: "grace@acme.dev" })]
+])
+
+const resolver = yield* RequestResolver.make<GetUserById>(
+  Effect.fn(function*(entries) {
+    // Process each request in the batch
+    for (const entry of entries) {
+      const user = usersTable.get(entry.request.id)
+      
+      if (user) {
+        entry.completeUnsafe(Exit.succeed(user))
+      } else {
+        entry.completeUnsafe(Exit.fail(new UserNotFound({ id: entry.request.id })))
+      }
+    }
+  })
+)
+```
+
+## Configuring batching behavior
+
+Control how requests are batched using resolver configuration.
+
+```typescript
+const resolver = yield* RequestResolver.make<GetUserById>(
+  Effect.fn(function*(entries) {
+    // Process batch...
+  })
+).pipe(
+  // Wait up to 10ms for more requests before executing
+  RequestResolver.setDelay("10 millis"),
+  
+  // Add observability with tracing
+  RequestResolver.withSpan("Users.getUserById.resolver"),
+  
+  // Cache results to avoid repeated lookups
+  RequestResolver.withCache({ capacity: 1024 })
+)
+```
+
+### Delay window
+
+The `setDelay` option controls how long the resolver waits before executing. Longer delays allow more requests to batch together but add latency to the first request.
+
+### Caching
+
+The `withCache` option adds an LRU cache that deduplicates identical requests across batches.
+
+## Building a service with batching
+
+Wrap your resolver in a service for convenient access throughout your application.
+
+```typescript
+import { Effect, Layer, ServiceMap } from "effect"
+
+export class Users extends ServiceMap.Service<Users, {
+  getUserById(id: number): Effect.Effect<User, UserNotFound>
+}>()("app/Users") {
+  static readonly layer = Layer.effect(
+    Users,
+    Effect.gen(function*() {
+      // Create resolver (as shown above)
+      const resolver = yield* RequestResolver.make<GetUserById>(
+        Effect.fn(function*(entries) {
+          for (const entry of entries) {
+            const user = usersTable.get(entry.request.id)
+            if (user) {
+              entry.completeUnsafe(Exit.succeed(user))
+            } else {
+              entry.completeUnsafe(Exit.fail(new UserNotFound({ id: entry.request.id })))
+            }
+          }
+        })
+      ).pipe(
+        RequestResolver.setDelay("10 millis"),
+        RequestResolver.withSpan("Users.getUserById.resolver"),
+        RequestResolver.withCache({ capacity: 1024 })
+      )
+
+      // Wrap resolver in a service method
+      const getUserById = (id: number) =>
+        Effect.request(new GetUserById({ id }), resolver).pipe(
+          Effect.withSpan("Users.getUserById", { attributes: { userId: id } })
+        )
+
+      return { getUserById } as const
+    })
+  )
+}
+```
+
+## Using batched requests
+
+Concurrent calls to the same method are automatically batched.
+
+```typescript
+import { Effect } from "effect"
+
+export const batchedLookupExample = Effect.gen(function*() {
+  const { getUserById } = yield* Users
+
+  // These 5 lookups trigger only one resolver call with unique IDs [1, 2, 3]
+  yield* Effect.forEach([1, 2, 1, 3, 2], getUserById, {
+    concurrency: "unbounded"
+  })
+})
+```
+
+The resolver receives one batch containing unique IDs. Duplicate IDs are automatically deduplicated, and cached results are reused.
+
+## Accessing request services
+
+If your requests have requirements, access them through `entry.services`.
+
+```typescript
+import { ServiceMap, Tracer } from "effect"
+
+const resolver = yield* RequestResolver.make<GetUserById>(
+  Effect.fn(function*(entries) {
+    for (const entry of entries) {
+      // Access request-specific services
+      const requestSpan = ServiceMap.getOption(entry.services, Tracer.ParentSpan)
+      console.log("Request span", requestSpan)
+      
+      // Process request...
+    }
+  })
+)
+```
+
+Request services allow context-specific behavior within batch processing.
+
+## When to use batching
+
+Request batching is ideal for:
+
+<CardGroup cols={2}>
+  <Card title="Database queries" icon="database">
+    Batch multiple lookups into a single `SELECT ... WHERE id IN (...)` query.
+  </Card>
+  
+  <Card title="API calls" icon="globe">
+    Combine multiple API requests into batch endpoints when available.
+  </Card>
+  
+  <Card title="Cache lookups" icon="bolt">
+    Fetch multiple cached values in one round trip (e.g., Redis `MGET`).
+  </Card>
+  
+  <Card title="Parallel operations" icon="diagram-project">
+    Optimize concurrent operations that share expensive resources.
+  </Card>
+</CardGroup>
+
+## Complete example
+
+```typescript
+import { Effect, Exit, Layer, Request, RequestResolver, Schema, ServiceMap } from "effect"
+
+export class User extends Schema.Class<User>("User")({
+  id: Schema.Number,
+  name: Schema.String,
+  email: Schema.String
+}) {}
+
+export class UserNotFound extends Schema.TaggedErrorClass<UserNotFound>()("UserNotFound", {
+  id: Schema.Number
+}) {}
+
+export class Users extends ServiceMap.Service<Users, {
+  getUserById(id: number): Effect.Effect<User, UserNotFound>
+}>()("app/Users") {
+  static readonly layer = Layer.effect(
+    Users,
+    Effect.gen(function*() {
+      class GetUserById extends Request.Class<
+        { readonly id: number },
+        User,
+        UserNotFound,
+        never
+      > {}
+
+      const usersTable = new Map<number, User>([
+        [1, new User({ id: 1, name: "Ada Lovelace", email: "ada@acme.dev" })],
+        [2, new User({ id: 2, name: "Alan Turing", email: "alan@acme.dev" })],
+        [3, new User({ id: 3, name: "Grace Hopper", email: "grace@acme.dev" })]
+      ])
+
+      const resolver = yield* RequestResolver.make<GetUserById>(
+        Effect.fn(function*(entries) {
+          for (const entry of entries) {
+            const user = usersTable.get(entry.request.id)
+            if (user) {
+              entry.completeUnsafe(Exit.succeed(user))
+            } else {
+              entry.completeUnsafe(Exit.fail(new UserNotFound({ id: entry.request.id })))
+            }
+          }
+        })
+      ).pipe(
+        RequestResolver.setDelay("10 millis"),
+        RequestResolver.withSpan("Users.getUserById.resolver"),
+        RequestResolver.withCache({ capacity: 1024 })
+      )
+
+      const getUserById = (id: number) =>
+        Effect.request(new GetUserById({ id }), resolver).pipe(
+          Effect.withSpan("Users.getUserById", { attributes: { userId: id } })
+        )
+
+      return { getUserById } as const
+    })
+  )
+}
+
+// Usage
+export const program = Effect.gen(function*() {
+  const { getUserById } = yield* Users
+  
+  // Automatically batches concurrent lookups
+  const users = yield* Effect.forEach([1, 2, 3], getUserById, {
+    concurrency: "unbounded"
+  })
+  
+  return users
+}).pipe(Effect.provide(Users.layer))
+```
+
+<Tip>
+Monitor the `setDelay` setting carefully. Shorter delays reduce latency for single requests but may reduce batching efficiency.
+</Tip>

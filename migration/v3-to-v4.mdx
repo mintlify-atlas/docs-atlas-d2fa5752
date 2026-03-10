@@ -1,0 +1,427 @@
+---
+title: Migrating from v3 to v4
+description: Complete guide to upgrading Effect from v3 to v4
+---
+
+<Warning>
+  Effect v4 is currently in beta. APIs may change between beta releases. This guide will evolve as the beta progresses and community feedback is incorporated.
+</Warning>
+
+## Overview
+
+Effect v4 is a major release with structural and organizational changes across the ecosystem. The core programming model — `Effect`, `Layer`, `Schema`, `Stream`, etc. — remains the same, but how packages are organized, versioned, and imported has changed significantly.
+
+## Key Changes
+
+### Unified Versioning
+
+All Effect ecosystem packages now share a **single version number** and are released together.
+
+<Note>
+  In v3, packages were versioned independently (e.g. `effect@3.x`, `@effect/platform@0.x`, `@effect/sql@0.x`), making compatibility between packages difficult to track.
+</Note>
+
+In v4, if you use `effect@4.0.0-beta.0`, the matching SQL package is `@effect/sql-pg@4.0.0-beta.0`. This makes dependency management straightforward and eliminates version compatibility issues.
+
+### Package Consolidation
+
+Many previously separate packages have been merged into the core `effect` package. Functionality from `@effect/platform`, `@effect/rpc`, `@effect/cluster`, and others now lives directly in `effect`.
+
+Packages that remain separate are platform-specific, provider-specific, or technology-specific:
+
+- `@effect/platform-*` — platform packages (Node.js, Bun, Browser)
+- `@effect/sql-*` — SQL driver packages (PostgreSQL, MySQL, SQLite, etc.)
+- `@effect/ai-*` — AI provider packages (OpenAI, Anthropic, etc.)
+- `@effect/opentelemetry` — OpenTelemetry integration
+- `@effect/atom-*` — framework-specific atom bindings
+- `@effect/vitest` — Vitest testing utilities
+
+<Warning>
+  These packages must be bumped to matching v4 beta versions alongside `effect`.
+</Warning>
+
+### Unstable Module System
+
+v4 introduces **unstable modules** under `effect/unstable/*` import paths. These modules may receive breaking changes in minor releases, while modules outside `unstable/` follow strict semver.
+
+Unstable modules include:
+
+- `ai` — AI model integrations
+- `cli` — Command-line interface utilities
+- `cluster` — Distributed computing primitives
+- `devtools` — Development tooling
+- `eventlog` — Event sourcing
+- `http` / `httpapi` — HTTP client and server
+- `jsonschema` — JSON Schema utilities
+- `observability` — Tracing and metrics
+- `persistence` — Data persistence patterns
+- `process` — Process management
+- `reactivity` — Reactive programming
+- `rpc` — Remote procedure calls
+- `schema` — Schema validation and transformation
+- `socket` — Socket programming
+- `sql` — SQL query building
+- `workflow` — Workflow orchestration
+- `workers` — Worker thread management
+
+<Note>
+  As these modules stabilize, they graduate to the top-level `effect/*` namespace.
+</Note>
+
+### Performance and Bundle Size
+
+The fiber runtime has been rewritten for reduced memory overhead and faster execution. The core `effect` package supports aggressive tree-shaking:
+
+- **Minimal Effect program**: ~6.3 KB (minified + gzipped)
+- **With Schema**: ~15 KB (minified + gzipped)
+
+## Core Breaking Changes
+
+### Services: `Context.Tag` → `ServiceMap.Service`
+
+All service definition APIs have been consolidated into `ServiceMap.Service`.
+
+**v3**
+
+```ts
+import { Context, Effect } from "effect"
+
+// GenericTag
+const Database = Context.GenericTag<Database>("Database")
+
+// Tag class syntax
+class Logger extends Context.Tag("Logger")<Logger, {
+  readonly log: (msg: string) => Effect.Effect<void>
+}>() {}
+
+// Effect.Tag with accessors
+class Notifications extends Effect.Tag("Notifications")<Notifications, {
+  readonly notify: (message: string) => Effect.Effect<void>
+}>() {}
+
+const program = Notifications.notify("hello")
+```
+
+**v4**
+
+```ts
+import { Effect, ServiceMap } from "effect"
+
+// Service function syntax
+const Database = ServiceMap.Service<Database>("Database")
+
+// Service class syntax
+class Logger extends ServiceMap.Service<Logger, {
+  readonly log: (msg: string) => Effect.Effect<void>
+}>()("Logger") {}
+
+// Use .use() for one-liner access
+class Notifications extends ServiceMap.Service<Notifications, {
+  readonly notify: (message: string) => Effect.Effect<void>
+}>()("Notifications") {}
+
+const program = Notifications.use((n) => n.notify("hello"))
+```
+
+<Warning>
+  The static accessor proxy from v3's `Effect.Tag` has been removed. Use `Service.use()` or `yield*` in generators instead.
+</Warning>
+
+See the [Services migration guide](/migration/services) for complete details.
+
+### Cause: Flattened Structure
+
+In v3, `Cause<E>` was a recursive tree with six variants. In v4, it's been flattened to a simple wrapper around an array of `Reason` values.
+
+**v3**
+
+```ts
+import { Cause } from "effect"
+
+const handle = (cause: Cause.Cause<string>) => {
+  switch (cause._tag) {
+    case "Fail":
+      return cause.error
+    case "Die":
+      return cause.defect
+    case "Empty":
+      return undefined
+    case "Sequential":
+      return handle(cause.left)
+    case "Parallel":
+      return handle(cause.left)
+    case "Interrupt":
+      return cause.fiberId
+  }
+}
+```
+
+**v4**
+
+```ts
+import { Cause } from "effect"
+
+const handle = (cause: Cause.Cause<string>) => {
+  for (const reason of cause.reasons) {
+    switch (reason._tag) {
+      case "Fail":
+        return reason.error
+      case "Die":
+        return reason.defect
+      case "Interrupt":
+        return reason.fiberId
+    }
+  }
+}
+```
+
+### Error Handling: `catch*` Renamings
+
+| v3 | v4 |
+| --- | --- |
+| `Effect.catchAll` | `Effect.catch` |
+| `Effect.catchAllCause` | `Effect.catchCause` |
+| `Effect.catchAllDefect` | `Effect.catchDefect` |
+| `Effect.catchSome` | `Effect.catchFilter` |
+| `Effect.catchSomeCause` | `Effect.catchCauseFilter` |
+| `Effect.catchSomeDefect` | Removed |
+
+**v3**
+
+```ts
+import { Effect, Option } from "effect"
+
+const program = Effect.fail("error").pipe(
+  Effect.catchAll((error) => Effect.succeed(`recovered: ${error}`))
+)
+
+const program2 = Effect.fail(42).pipe(
+  Effect.catchSome((error) =>
+    error === 42
+      ? Option.some(Effect.succeed("caught"))
+      : Option.none()
+  )
+)
+```
+
+**v4**
+
+```ts
+import { Effect, Filter } from "effect"
+
+const program = Effect.fail("error").pipe(
+  Effect.catch((error) => Effect.succeed(`recovered: ${error}`))
+)
+
+const program2 = Effect.fail(42).pipe(
+  Effect.catchFilter(
+    Filter.fromPredicate((error: number) => error === 42),
+    (error) => Effect.succeed("caught")
+  )
+)
+```
+
+### Forking: Renamed Combinators
+
+| v3 | v4 | Description |
+| --- | --- | --- |
+| `Effect.fork` | `Effect.forkChild` | Fork as a child of the current fiber |
+| `Effect.forkDaemon` | `Effect.forkDetach` | Fork detached from parent lifecycle |
+| `Effect.forkScoped` | `Effect.forkScoped` | Fork tied to the current `Scope` (unchanged) |
+| `Effect.forkAll` | Removed | Fork effects individually instead |
+| `Effect.forkWithErrorHandler` | Removed | Use `Fiber.join` or `Fiber.await` for error handling |
+
+**v3**
+
+```ts
+import { Effect } from "effect"
+
+const fiber = Effect.fork(myEffect)
+const daemon = Effect.forkDaemon(backgroundTask)
+```
+
+**v4**
+
+```ts
+import { Effect } from "effect"
+
+const fiber = Effect.forkChild(myEffect)
+const daemon = Effect.forkDetach(backgroundTask)
+
+// New options available
+const immediate = Effect.forkChild(myEffect, { startImmediately: true })
+```
+
+### Runtime: `Runtime<R>` Removed
+
+The `Runtime<R>` type no longer exists. Run functions live directly on `Effect`.
+
+**v3**
+
+```ts
+import { Effect, Runtime } from "effect"
+
+const main = Effect.gen(function*() {
+  const runtime = yield* Effect.runtime<Logger>()
+  return Runtime.runFork(runtime)(program)
+})
+```
+
+**v4**
+
+```ts
+import { Effect } from "effect"
+
+const main = Effect.gen(function*() {
+  const services = yield* Effect.services<Logger>()
+  return Effect.runForkWith(services)(program)
+})
+```
+
+### Layer Memoization Across `Effect.provide` Calls
+
+In v3, layers were only memoized within a single `Effect.provide` call. In v4, layers are automatically memoized across multiple `provide` calls by default.
+
+**v3**
+
+```ts
+import { Effect } from "effect"
+
+const main = program.pipe(
+  Effect.provide(MyServiceLayer),
+  Effect.provide(MyServiceLayer)
+)
+// "Building MyService" is logged TWICE
+```
+
+**v4**
+
+```ts
+import { Effect } from "effect"
+
+const main = program.pipe(
+  Effect.provide(MyServiceLayer),
+  Effect.provide(MyServiceLayer)
+)
+// "Building MyService" is logged ONCE (automatically memoized)
+
+// Opt out with { local: true }
+const isolated = program.pipe(
+  Effect.provide(MyServiceLayer, { local: true })
+)
+```
+
+<Note>
+  Even with automatic memoization, **composing layers before providing is still the recommended pattern**. The auto-memoization is a safety net, not a substitute for proper layer composition.
+</Note>
+
+## Schema Breaking Changes
+
+Schema has undergone significant restructuring in v4. See the [Schema migration guide](/migration/schema) for comprehensive details.
+
+Key highlights:
+
+- **Variadic to array**: `Union(A, B)` → `Union([A, B])`, `Tuple(A, B)` → `Tuple([A, B])`
+- **Record restructure**: `Record({ key, value })` → `Record(key, value)`
+- **Filter rename**: `filter(predicate)` → `check(makeFilter(predicate))`
+- **Transform restructure**: `transform(from, to, { decode, encode })` → `from.pipe(decodeTo(to, SchemaTransformation.transform(...)))`
+- **Decode/Encode rename**: `decodeUnknown` → `decodeUnknownEffect`, `decode` → `decodeEffect`
+- **FromSelf suffix removal**: `BigIntFromSelf` → `BigInt`, `URLFromSelf` → `URL`
+- **validate* removal**: Use `Schema.decode*` + `Schema.toType` instead
+
+## Migration Strategy
+
+### 1. Update Dependencies
+
+Update all Effect packages to matching v4 beta versions:
+
+```json
+{
+  "dependencies": {
+    "effect": "4.0.0-beta.0",
+    "@effect/platform-node": "4.0.0-beta.0",
+    "@effect/sql-pg": "4.0.0-beta.0"
+  }
+}
+```
+
+### 2. Update Imports
+
+Many imports that previously came from `@effect/*` packages now come from `effect`:
+
+**v3**
+
+```ts
+import { HttpClient } from "@effect/platform"
+import { Schema } from "@effect/schema"
+```
+
+**v4**
+
+```ts
+import { Schema } from "effect"
+import { HttpClient } from "effect/unstable/http"
+```
+
+### 3. Update Service Definitions
+
+Replace `Context.Tag`, `Context.GenericTag`, and `Effect.Tag` with `ServiceMap.Service`:
+
+```ts
+// Find and replace
+- import { Context, Effect } from "effect"
++ import { Effect, ServiceMap } from "effect"
+
+- Context.GenericTag<T>("Name")
++ ServiceMap.Service<T>("Name")
+
+- class Service extends Context.Tag("Name")<Self, Shape>() {}
++ class Service extends ServiceMap.Service<Self, Shape>()("Name") {}
+
+- class Service extends Effect.Tag("Name")<Self, Shape>() {}
++ class Service extends ServiceMap.Service<Self, Shape>()("Name") {}
+```
+
+### 4. Update Error Handling
+
+Rename `catch*` combinators:
+
+```ts
+- Effect.catchAll
++ Effect.catch
+
+- Effect.catchAllCause
++ Effect.catchCause
+
+- Effect.catchSome
++ Effect.catchFilter
+```
+
+### 5. Update Forking
+
+Rename forking combinators:
+
+```ts
+- Effect.fork
++ Effect.forkChild
+
+- Effect.forkDaemon
++ Effect.forkDetach
+```
+
+### 6. Update Schema Usage
+
+Follow the [Schema migration guide](/migration/schema) for detailed transformation patterns.
+
+## Getting Help
+
+If you encounter issues during migration:
+
+1. Check the [detailed migration guides](/migration/services) for specific APIs
+2. Search the [Effect Discord community](https://discord.gg/effect-ts)
+3. Review the [v4 changelog](https://github.com/Effect-TS/effect/releases)
+4. Open an issue on [GitHub](https://github.com/Effect-TS/effect/issues) if you find bugs or documentation gaps
+
+<Note>
+  Remember that v4 is currently in beta. Your feedback during the beta period helps shape the final release.
+</Note>

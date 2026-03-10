@@ -1,0 +1,417 @@
+---
+title: "Process"
+description: "Unstable Process module for child process management with Effect"
+---
+
+<Warning>
+  The Process module is marked as **unstable**, meaning its APIs may change in minor version releases. Use caution when upgrading Effect versions.
+</Warning>
+
+## Overview
+
+The `effect/unstable/process` module provides an Effect-native interface for working with child processes. It uses an AST-based approach where commands are built first using declarative APIs, then executed with proper resource management, streaming, and error handling.
+
+## Installation
+
+```bash
+npm install effect
+```
+
+## Key Modules
+
+### ChildProcess
+
+The main interface for creating and executing child processes.
+
+```typescript
+import { NodeServices } from "@effect/platform-node"
+import { Effect, Stream } from "effect"
+import { ChildProcess } from "effect/unstable/process"
+
+// Build a command
+const command = ChildProcess.make`echo "hello world"`
+
+// Spawn and collect output
+const program = Effect.gen(function*() {
+  // Spawn the command (ChildProcess implements Effect.Yieldable)
+  const handle = yield* command
+  
+  // Read stdout as chunks
+  const chunks = yield* Stream.runCollect(handle.stdout)
+  
+  // Wait for exit
+  const exitCode = yield* handle.exitCode
+  
+  return { chunks, exitCode }
+}).pipe(
+  Effect.scoped,
+  Effect.provide(NodeServices.layer)
+)
+```
+
+**Key Functions:**
+- `ChildProcess.make` - Create a command using template literals
+- `ChildProcess.spawn` - Execute a command and get a handle
+- `ChildProcess.pipeTo` - Pipe output from one command to another
+- `ChildProcess.exec` - Execute and return stdout/stderr as strings
+
+### Creating Commands
+
+#### Template Literal Syntax
+
+```typescript
+import { ChildProcess } from "effect/unstable/process"
+
+// Simple command
+const ls = ChildProcess.make`ls -la`
+
+// With interpolated values (properly escaped)
+const filename = "my file.txt"
+const cat = ChildProcess.make`cat ${filename}`
+
+// With options
+const withCwd = ChildProcess.make({ cwd: "/tmp" })`ls -la`
+
+const withEnv = ChildProcess.make({ 
+  env: { NODE_ENV: "production" } 
+})`npm run build`
+```
+
+#### Command Options
+
+```typescript
+import { ChildProcess } from "effect/unstable/process"
+
+const command = ChildProcess.make({
+  cwd: "/path/to/directory",      // Working directory
+  env: { KEY: "value" },          // Environment variables
+  shell: true,                     // Run in shell
+  timeout: 30000,                  // Timeout in milliseconds
+  killSignal: "SIGTERM",           // Signal for timeout/cancel
+  windowsHide: true                // Hide window on Windows
+})`my-command arg1 arg2`
+```
+
+### Process Handle
+
+When you spawn a command, you get a handle with streams and process info:
+
+```typescript
+import { Effect, Stream } from "effect"
+import { ChildProcess } from "effect/unstable/process"
+
+const program = Effect.gen(function*() {
+  const handle = yield* ChildProcess.make`long-running-command`
+  
+  // Access streams
+  const stdout: Stream.Stream<Uint8Array> = handle.stdout
+  const stderr: Stream.Stream<Uint8Array> = handle.stderr
+  
+  // Write to stdin
+  yield* Stream.make("input data").pipe(
+    Stream.run(handle.stdin)
+  )
+  
+  // Get process ID
+  const pid = handle.pid
+  
+  // Wait for exit
+  const exitCode = yield* handle.exitCode
+  
+  // Kill the process
+  yield* handle.kill("SIGTERM")
+  
+  return exitCode
+}).pipe(Effect.scoped)
+```
+
+### Piping Commands
+
+Pipe output from one command to another:
+
+```typescript
+import { Effect, Stream } from "effect"
+import { ChildProcess } from "effect/unstable/process"
+
+// Create pipeline: cat package.json | grep name
+const pipeline = ChildProcess.make`cat package.json`.pipe(
+  ChildProcess.pipeTo(ChildProcess.make`grep name`)
+)
+
+// Execute pipeline
+const program = Effect.gen(function*() {
+  const handle = yield* pipeline
+  const output = yield* Stream.runCollect(handle.stdout)
+  return output
+}).pipe(Effect.scoped)
+
+// Complex pipeline: ps aux | grep node | awk '{print $2}'
+const complexPipeline = ChildProcess.make`ps aux`.pipe(
+  ChildProcess.pipeTo(ChildProcess.make`grep node`),
+  ChildProcess.pipeTo(ChildProcess.make`awk '{print $2}'`)
+)
+```
+
+### Executing Commands
+
+#### Execute and Collect Output
+
+```typescript
+import { Effect } from "effect"
+import { ChildProcess } from "effect/unstable/process"
+
+// Execute and get stdout/stderr as strings
+const program = Effect.gen(function*() {
+  const result = yield* ChildProcess.exec(
+    ChildProcess.make`git status --porcelain`
+  )
+  
+  console.log(result.stdout) // Standard output as string
+  console.log(result.stderr) // Standard error as string
+  console.log(result.exitCode) // Exit code
+  
+  return result
+})
+```
+
+#### Streaming Output
+
+```typescript
+import { Effect, Stream } from "effect"
+import { ChildProcess } from "effect/unstable/process"
+
+// Stream and process output line by line
+const program = Effect.gen(function*() {
+  const handle = yield* ChildProcess.make`npm install`
+  
+  // Process stdout line by line
+  yield* handle.stdout.pipe(
+    Stream.decodeText(),
+    Stream.splitLines,
+    Stream.tap(line => Effect.log(`Output: ${line}`)),
+    Stream.runDrain
+  )
+  
+  const exitCode = yield* handle.exitCode
+  return exitCode
+}).pipe(Effect.scoped)
+```
+
+#### Handling Errors
+
+```typescript
+import { Effect } from "effect"
+import { ChildProcess } from "effect/unstable/process"
+
+// Command that might fail
+const program = Effect.gen(function*() {
+  const result = yield* ChildProcess.exec(
+    ChildProcess.make`test -f nonexistent.txt`
+  )
+  
+  if (result.exitCode !== 0) {
+    return yield* Effect.fail(new Error(`Command failed: ${result.stderr}`))
+  }
+  
+  return result
+})
+
+// Or use Effect's error handling
+const safeProgram = program.pipe(
+  Effect.catchAll(error => 
+    Effect.gen(function*() {
+      yield* Effect.logError(`Process error: ${error}`)
+      return { exitCode: 1, stdout: "", stderr: String(error) }
+    })
+  )
+)
+```
+
+### Interactive Processes
+
+```typescript
+import { Effect, Stream } from "effect"
+import { ChildProcess } from "effect/unstable/process"
+
+// Run an interactive command
+const interactive = Effect.gen(function*() {
+  const handle = yield* ChildProcess.make`python3 -i`
+  
+  // Send commands to stdin
+  yield* Stream.make(
+    "import sys\n",
+    "print(sys.version)\n",
+    "exit()\n"
+  ).pipe(
+    Stream.encodeText(),
+    Stream.run(handle.stdin)
+  )
+  
+  // Read output
+  const output = yield* handle.stdout.pipe(
+    Stream.decodeText(),
+    Stream.runCollect
+  )
+  
+  yield* handle.exitCode
+  
+  return output
+}).pipe(Effect.scoped)
+```
+
+### ChildProcessSpawner
+
+The service interface for spawning child processes. Platform-specific packages (like `@effect/platform-node`) provide implementations.
+
+```typescript
+import { Effect } from "effect"
+import { ChildProcessSpawner } from "effect/unstable/process"
+
+// Access the spawner service
+const program = Effect.gen(function*() {
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+  
+  // Use spawner to create processes
+  const handle = yield* spawner.spawn({
+    command: "ls",
+    args: ["-la"],
+    options: { cwd: "/tmp" }
+  })
+  
+  return handle
+}).pipe(Effect.scoped)
+```
+
+## Complete Examples
+
+### Build Script
+
+```typescript
+import { Effect, Stream } from "effect"
+import { NodeServices } from "@effect/platform-node"
+import { ChildProcess } from "effect/unstable/process"
+
+// Build script with multiple steps
+const build = Effect.gen(function*() {
+  yield* Effect.log("Cleaning build directory...")
+  yield* ChildProcess.exec(ChildProcess.make`rm -rf dist`)
+  
+  yield* Effect.log("Running TypeScript compiler...")
+  const tsc = yield* ChildProcess.make`tsc --build`
+  yield* tsc.stdout.pipe(
+    Stream.decodeText(),
+    Stream.splitLines,
+    Stream.tap(line => Effect.log(line)),
+    Stream.runDrain
+  )
+  
+  const exitCode = yield* tsc.exitCode
+  if (exitCode !== 0) {
+    return yield* Effect.fail(new Error("Build failed"))
+  }
+  
+  yield* Effect.log("Build successful!")
+  return { success: true }
+}).pipe(
+  Effect.scoped,
+  Effect.provide(NodeServices.layer)
+)
+
+Effect.runPromise(build)
+```
+
+### Git Operations
+
+```typescript
+import { Effect } from "effect"
+import { NodeServices } from "@effect/platform-node"
+import { ChildProcess } from "effect/unstable/process"
+
+const gitStatus = Effect.gen(function*() {
+  const result = yield* ChildProcess.exec(
+    ChildProcess.make`git status --porcelain`
+  )
+  
+  const files = result.stdout
+    .split("\n")
+    .filter(line => line.trim())
+    .map(line => ({
+      status: line.substring(0, 2),
+      file: line.substring(3)
+    }))
+  
+  return files
+})
+
+const gitCommit = (message: string) => Effect.gen(function*() {
+  yield* ChildProcess.exec(ChildProcess.make`git add .`)
+  yield* ChildProcess.exec(ChildProcess.make`git commit -m ${message}`)
+  return { success: true }
+})
+
+const program = Effect.gen(function*() {
+  const status = yield* gitStatus
+  
+  if (status.length > 0) {
+    yield* Effect.log(`Found ${status.length} changed files`)
+    yield* gitCommit("Auto commit")
+  } else {
+    yield* Effect.log("No changes to commit")
+  }
+}).pipe(Effect.provide(NodeServices.layer))
+```
+
+### Process Monitoring
+
+```typescript
+import { Effect, Stream, Schedule } from "effect"
+import { NodeServices } from "@effect/platform-node"
+import { ChildProcess } from "effect/unstable/process"
+
+const monitorProcess = (name: string) => Effect.gen(function*() {
+  const result = yield* ChildProcess.exec(
+    ChildProcess.make`pgrep -f ${name}`
+  )
+  
+  const pids = result.stdout
+    .split("\n")
+    .filter(Boolean)
+    .map(Number)
+  
+  return pids
+})
+
+const monitor = Effect.gen(function*() {
+  yield* monitorProcess("node").pipe(
+    Effect.tap(pids => Effect.log(`Found ${pids.length} node processes`)),
+    Effect.repeat(Schedule.fixed("5 seconds")),
+    Effect.fork
+  )
+  
+  yield* Effect.never
+}).pipe(Effect.provide(NodeServices.layer))
+```
+
+## Best Practices
+
+1. **Resource Management** - Always use `Effect.scoped` to ensure processes are cleaned up
+2. **Error Handling** - Check exit codes and handle failures appropriately
+3. **Streaming** - Use streams for large outputs instead of buffering
+4. **Timeouts** - Set timeouts for long-running processes
+5. **Security** - Be careful with user input in commands (template literals provide escaping)
+6. **Platform** - Consider platform differences (Windows vs Unix)
+7. **Testing** - Use test implementations of ChildProcessSpawner for unit tests
+
+## Platform Support
+
+The Process module requires a platform-specific implementation:
+
+- **Node.js** - `@effect/platform-node` provides `NodeServices.layer`
+- **Bun** - `@effect/platform-bun` provides Bun support
+- **Deno** - Future support planned
+
+## Related Modules
+
+- [CLI](/api/unstable/cli) - Build command-line applications
+- [Cluster](/api/unstable/cluster) - Distributed process coordination
+- [SQL](/api/unstable/sql) - Database operations

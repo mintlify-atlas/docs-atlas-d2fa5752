@@ -1,0 +1,219 @@
+---
+title: '@effect/ai-openrouter'
+description: 'OpenRouter provider integration for Effect AI SDK'
+icon: 'route'
+---
+
+An OpenRouter provider integration that provides type-safe, Effect-based access to multiple AI models through OpenRouter's unified API.
+
+## Installation
+
+```bash
+pnpm add @effect/ai-openrouter effect
+```
+
+## Overview
+
+OpenRouter provides access to multiple AI models from different providers (OpenAI, Anthropic, Google, Meta, and more) through a single unified API. This package makes it easy to use any OpenRouter-supported model with Effect.
+
+## Setup
+
+Create an OpenRouter client by providing your API key:
+
+```ts
+import { OpenRouterClient } from "@effect/ai-openrouter"
+import { Effect, Layer, Redacted } from "effect"
+
+const OpenRouterLive = OpenRouterClient.layer({
+  apiKey: Redacted.make(process.env.OPENROUTER_API_KEY!)
+})
+```
+
+## Language Model
+
+Use any OpenRouter-supported model:
+
+```ts
+import { OpenRouterLanguageModel } from "@effect/ai-openrouter"
+import { Effect } from "effect"
+import { LanguageModel } from "effect/unstable/ai"
+
+const program = Effect.gen(function*() {
+  const result = yield* LanguageModel.generate({
+    prompt: "Explain the concept of immutability"
+  })
+  console.log(result)
+}).pipe(
+  Effect.provide(OpenRouterLanguageModel.model("anthropic/claude-3.5-sonnet")),
+  Effect.provide(OpenRouterLive)
+)
+
+Effect.runPromise(program)
+```
+
+## Available Models
+
+OpenRouter supports models from multiple providers:
+
+```ts
+// Anthropic models
+OpenRouterLanguageModel.model("anthropic/claude-3.5-sonnet")
+OpenRouterLanguageModel.model("anthropic/claude-3-opus")
+
+// OpenAI models
+OpenRouterLanguageModel.model("openai/gpt-4o")
+OpenRouterLanguageModel.model("openai/gpt-4-turbo")
+
+// Google models
+OpenRouterLanguageModel.model("google/gemini-pro")
+
+// Meta models
+OpenRouterLanguageModel.model("meta-llama/llama-3.1-70b-instruct")
+
+// And many more...
+```
+
+## Streaming Responses
+
+Stream responses for real-time text generation:
+
+```ts
+import { OpenRouterLanguageModel } from "@effect/ai-openrouter"
+import { Effect, Stream } from "effect"
+import { LanguageModel } from "effect/unstable/ai"
+
+const program = Effect.gen(function*() {
+  const stream = yield* LanguageModel.streamText({
+    prompt: "Write a haiku about functional programming"
+  })
+  
+  yield* Stream.runForEach(stream, (chunk) =>
+    Effect.sync(() => process.stdout.write(chunk.text))
+  )
+}).pipe(
+  Effect.provide(OpenRouterLanguageModel.model("anthropic/claude-3.5-sonnet")),
+  Effect.provide(OpenRouterLive)
+)
+
+Effect.runPromise(program)
+```
+
+## Tool Calling
+
+Use tools with OpenRouter models that support function calling:
+
+```ts
+import { OpenRouterLanguageModel } from "@effect/ai-openrouter"
+import { Effect, Schema } from "effect"
+import { LanguageModel, Tool, Toolkit } from "effect/unstable/ai"
+
+const CalculatorTool = Tool.make("Calculator", {
+  description: "Perform basic arithmetic operations",
+  parameters: Schema.Struct({
+    operation: Schema.Literal("add", "subtract", "multiply", "divide"),
+    a: Schema.Number,
+    b: Schema.Number
+  }),
+  success: Schema.Number
+})
+
+const program = Effect.gen(function*() {
+  const toolkit = Toolkit.make(CalculatorTool)
+  const toolkitLayer = toolkit.toLayer({
+    Calculator: ({ operation, a, b }) => {
+      switch (operation) {
+        case "add": return Effect.succeed(a + b)
+        case "subtract": return Effect.succeed(a - b)
+        case "multiply": return Effect.succeed(a * b)
+        case "divide": return Effect.succeed(a / b)
+      }
+    }
+  })
+  
+  const result = yield* LanguageModel.generate({
+    prompt: "What is 42 multiplied by 7?",
+    toolkit
+  })
+  
+  console.log(result)
+}).pipe(
+  Effect.provide(OpenRouterLanguageModel.model("openai/gpt-4o")),
+  Effect.provide(toolkitLayer),
+  Effect.provide(OpenRouterLive)
+)
+
+Effect.runPromise(program)
+```
+
+## Configuration
+
+Customize the OpenRouter client:
+
+```ts
+import { OpenRouterClient, OpenRouterConfig } from "@effect/ai-openrouter"
+import { Redacted } from "effect"
+
+const config: OpenRouterConfig.Config = {
+  apiKey: Redacted.make(process.env.OPENROUTER_API_KEY!),
+  baseUrl: "https://openrouter.ai/api/v1", // Optional: custom base URL
+  siteUrl: "https://myapp.com", // Optional: for rankings
+  siteName: "My App" // Optional: for rankings
+}
+
+const OpenRouterLive = OpenRouterClient.layer(config)
+```
+
+## Error Handling
+
+Handle OpenRouter-specific errors:
+
+```ts
+import { OpenRouterError } from "@effect/ai-openrouter"
+import { Effect } from "effect"
+
+const program = Effect.gen(function*() {
+  // Your OpenRouter API calls
+}).pipe(
+  Effect.catchTag("HttpClientError", (error) =>
+    Effect.sync(() => {
+      console.error("OpenRouter API error:", error)
+      // Handle rate limits, invalid models, etc.
+    })
+  )
+)
+```
+
+## Model Pricing and Selection
+
+OpenRouter provides access to models at different price points. Visit [OpenRouter's model page](https://openrouter.ai/models) to compare models, pricing, and capabilities.
+
+```ts
+// Cost-effective models
+OpenRouterLanguageModel.model("meta-llama/llama-3.1-8b-instruct") // Free
+OpenRouterLanguageModel.model("google/gemini-flash-1.5") // Low cost
+
+// High-performance models
+OpenRouterLanguageModel.model("anthropic/claude-3.5-sonnet") // Premium
+OpenRouterLanguageModel.model("openai/gpt-4o") // Premium
+```
+
+## API Modules
+
+- **OpenRouterClient**: HTTP client for OpenRouter API
+- **OpenRouterConfig**: Configuration options
+- **OpenRouterError**: Error type augmentation
+- **OpenRouterLanguageModel**: Language model implementation
+
+## Benefits of OpenRouter
+
+- **Unified API**: Access multiple AI providers through a single interface
+- **Cost Optimization**: Choose the most cost-effective model for your use case
+- **Fallback Support**: Automatically fall back to alternative models if one is unavailable
+- **No Rate Limits**: OpenRouter handles rate limiting across providers
+- **Pay As You Go**: Only pay for what you use, no monthly subscriptions
+
+## Related Packages
+
+- [@effect/ai-anthropic](/packages/ai-anthropic)
+- [@effect/ai-openai](/packages/ai-openai)
+- [@effect/opentelemetry](/packages/opentelemetry)

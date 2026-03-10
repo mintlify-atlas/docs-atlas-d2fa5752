@@ -1,0 +1,202 @@
+---
+title: Clock
+description: Access system time and manage delays in Effect applications
+---
+
+The `Clock` module provides functionality for time-based operations in Effect applications. It offers precise time measurements, scheduling capabilities, and controlled time management for testing scenarios.
+
+## Core Capabilities
+
+The Clock service is a core component of the Effect runtime, providing:
+- Current time access in milliseconds and nanoseconds
+- Sleep operations for delaying execution
+- Time-based scheduling primitives
+- Testable time control through `TestClock`
+
+## Getting Current Time
+
+Access the current time with millisecond or nanosecond precision.
+
+```ts
+import { Clock, Effect } from "effect"
+
+const program = Effect.gen(function*() {
+  // Get current time in milliseconds
+  const currentTime = yield* Clock.currentTimeMillis
+  console.log(`Current time: ${currentTime}ms`)
+
+  // Get current time in nanoseconds for high precision
+  const currentTimeNanos = yield* Clock.currentTimeNanos
+  console.log(`Current time: ${currentTimeNanos}ns`)
+})
+```
+
+## Sleep Operations
+
+Delay execution with non-blocking sleep operations.
+
+```ts
+import { Effect } from "effect"
+
+const delayed = Effect.gen(function*() {
+  console.log("Starting...")
+  
+  // Sleep for 1 second
+  yield* Effect.sleep("1 seconds")
+  
+  console.log("Completed after 1 second")
+})
+```
+
+## Measuring Execution Time
+
+Measure the duration of operations using Clock.
+
+```ts
+import { Clock, Effect } from "effect"
+
+const measureTime = Effect.gen(function*() {
+  const start = yield* Clock.currentTimeMillis
+  
+  // Perform some operation
+  yield* Effect.sleep("100 millis")
+  
+  const end = yield* Clock.currentTimeMillis
+  const elapsed = end - start
+  
+  console.log(`Operation took ${elapsed}ms`)
+  return elapsed
+})
+```
+
+## Using the Clock Service
+
+Access the Clock service directly for more control.
+
+```ts
+import { Clock, Effect } from "effect"
+
+const program = Effect.gen(function*() {
+  // Access the Clock service
+  const clock = yield* Clock.Clock
+  
+  // Use unsafe methods for synchronous time access
+  const currentTime = clock.currentTimeMillisUnsafe()
+  console.log(`Current time: ${currentTime}`)
+  
+  // Use effectful methods
+  const time = yield* clock.currentTimeMillis
+  console.log(`Effect time: ${time}`)
+})
+```
+
+## Using clockWith
+
+Run functions that need Clock access.
+
+```ts
+import { Clock, Effect } from "effect"
+
+const program = Clock.clockWith((clock) =>
+  Effect.sync(() => {
+    const currentTime = clock.currentTimeMillisUnsafe()
+    console.log(`Current time: ${currentTime}`)
+    return currentTime
+  })
+)
+```
+
+## API Reference
+
+### Clock Service
+
+#### `Clock.Clock: ServiceMap.Reference<Clock>`
+
+A reference to the current Clock service in the environment.
+
+```ts
+interface Clock {
+  // Get current time in milliseconds (unsafe)
+  currentTimeMillisUnsafe(): number
+  
+  // Get current time in milliseconds (effectful)
+  readonly currentTimeMillis: Effect<number>
+  
+  // Get current time in nanoseconds (unsafe)
+  currentTimeNanosUnsafe(): bigint
+  
+  // Get current time in nanoseconds (effectful)
+  readonly currentTimeNanos: Effect<bigint>
+  
+  // Sleep for the specified duration
+  sleep(duration: Duration.Duration): Effect<void>
+}
+```
+
+### Functions
+
+#### `clockWith`
+
+```ts
+function clockWith<A, E, R>(
+  f: (clock: Clock) => Effect<A, E, R>
+): Effect<A, E, R>
+```
+
+Accesses the current Clock service and uses it to run the provided function.
+
+**Since**: 2.0.0
+
+#### `currentTimeMillis`
+
+```ts
+const currentTimeMillis: Effect<number>
+```
+
+Returns an Effect that succeeds with the current time in milliseconds.
+
+**Since**: 2.0.0
+
+#### `currentTimeNanos`
+
+```ts
+const currentTimeNanos: Effect<bigint>
+```
+
+Returns an Effect that succeeds with the current time in nanoseconds.
+
+**Since**: 2.0.0
+
+## Testing with Clock
+
+For testing, Effect provides `TestClock` to control time deterministically:
+
+```ts
+import { Clock, Effect, TestClock } from "effect"
+
+const test = Effect.gen(function*() {
+  // Get the test clock
+  const testClock = yield* TestClock.TestClock
+  
+  // Start an effect that sleeps
+  const fiber = yield* Effect.fork(
+    Effect.gen(function*() {
+      yield* Effect.sleep("1 hours")
+      return "done"
+    })
+  )
+  
+  // Advance time by 1 hour
+  yield* testClock.adjust("1 hours")
+  
+  // The fiber should now complete
+  const result = yield* fiber.await
+  console.log(result) // "done"
+})
+```
+
+## Related
+
+- [Duration](./duration) - Working with time spans
+- [DateTime](./datetime) - Working with dates and times
+- [Schedule](./schedule) - Repeating and retrying with schedules

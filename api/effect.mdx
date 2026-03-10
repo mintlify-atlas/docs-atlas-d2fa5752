@@ -1,0 +1,434 @@
+---
+title: Effect
+description: Core Effect module for modeling asynchronous, concurrent, and effectful computations
+---
+
+# Effect
+
+The `Effect` module is the core of the Effect library, providing a powerful way to model and compose asynchronous, concurrent, and effectful computations.
+
+An `Effect<A, E, R>` represents a computation that:
+- May succeed with a value of type `A`
+- May fail with an error of type `E`
+- Requires a context/environment of type `R`
+
+## Key Features
+
+- **Type-safe error handling**: Errors are tracked in the type system
+- **Resource management**: Automatic cleanup with scoped resources
+- **Structured concurrency**: Safe parallel and concurrent execution
+- **Composable**: Effects can be combined using operators like `flatMap`, `map`, `zip`
+- **Testable**: Built-in support for testing with controlled environments
+- **Interruptible**: Effects can be safely interrupted and cancelled
+
+## Type Signature
+
+```typescript
+interface Effect<out A, out E = never, out R = never>
+```
+
+<ParamField path="A" type="type parameter">
+  The success type - the value type that the effect will produce when it succeeds
+</ParamField>
+
+<ParamField path="E" type="type parameter" default="never">
+  The error type - the type of error that the effect may fail with
+</ParamField>
+
+<ParamField path="R" type="type parameter" default="never">
+  The context/environment type - the services required to run the effect
+</ParamField>
+
+## Creating Effects
+
+### succeed
+
+Creates an `Effect` that always succeeds with a given value.
+
+```typescript
+const success: Effect<number> = Effect.succeed(42)
+```
+
+**Signature:**
+```typescript
+function succeed<A>(value: A): Effect<A>
+```
+
+<ParamField path="value" type="A" required>
+  The value to succeed with
+</ParamField>
+
+<ResponseField name="returns" type="Effect<A>">
+  An effect that succeeds with the provided value
+</ResponseField>
+
+### fail
+
+Creates an `Effect` that represents a failure.
+
+```typescript
+class MyError extends Data.TaggedError("MyError")<{}> {}
+const failure: Effect<never, MyError> = Effect.fail(new MyError())
+```
+
+**Signature:**
+```typescript
+function fail<E>(error: E): Effect<never, E>
+```
+
+<ParamField path="error" type="E" required>
+  The error value to fail with
+</ParamField>
+
+<ResponseField name="returns" type="Effect<never, E>">
+  An effect that fails with the provided error
+</ResponseField>
+
+### sync
+
+Creates an `Effect` from a synchronous side-effectful function.
+
+```typescript
+const getTimestamp = Effect.sync(() => Date.now())
+```
+
+**Signature:**
+```typescript
+function sync<A>(evaluate: () => A): Effect<A>
+```
+
+<ParamField path="evaluate" type="() => A" required>
+  A function that will be evaluated when the effect runs
+</ParamField>
+
+<ResponseField name="returns" type="Effect<A>">
+  An effect that evaluates the function when run
+</ResponseField>
+
+### promise
+
+Creates an `Effect` that represents an asynchronous computation guaranteed to succeed.
+
+```typescript
+const delay = (message: string) =>
+  Effect.promise<string>(() =>
+    new Promise((resolve) => {
+      setTimeout(() => resolve(message), 2000)
+    })
+  )
+```
+
+**Signature:**
+```typescript
+function promise<A>(
+  evaluate: (signal: AbortSignal) => PromiseLike<A>
+): Effect<A>
+```
+
+<ParamField path="evaluate" type="(signal: AbortSignal) => PromiseLike<A>" required>
+  A function that returns a Promise. Receives an AbortSignal for interruption support.
+</ParamField>
+
+<ResponseField name="returns" type="Effect<A>">
+  An effect that wraps the promise computation
+</ResponseField>
+
+### tryPromise
+
+Creates an `Effect` that represents an asynchronous computation that might fail.
+
+```typescript
+class FetchError extends Data.TaggedError("FetchError")<{ cause: unknown }> {}
+
+const getTodo = (id: number) =>
+  Effect.tryPromise({
+    try: () => fetch(`https://api.example.com/todos/${id}`),
+    catch: (cause) => new FetchError({ cause })
+  })
+```
+
+**Signature:**
+```typescript
+function tryPromise<A, E>(
+  options:
+    | { try: (signal: AbortSignal) => PromiseLike<A>; catch: (error: unknown) => E }
+    | ((signal: AbortSignal) => PromiseLike<A>)
+): Effect<A, E>
+```
+
+<ParamField path="options.try" type="(signal: AbortSignal) => PromiseLike<A>" required>
+  A function that returns a Promise that may reject
+</ParamField>
+
+<ParamField path="options.catch" type="(error: unknown) => E">
+  Optional function to map rejection errors. If omitted, errors become `UnknownError`.
+</ParamField>
+
+<ResponseField name="returns" type="Effect<A, E>">
+  An effect that may fail with the mapped error type
+</ResponseField>
+
+### suspend
+
+Delays the creation of an `Effect` until it is actually needed.
+
+```typescript
+let i = 0
+const good = Effect.suspend(() => Effect.succeed(i++))
+
+console.log(Effect.runSync(good)) // 0
+console.log(Effect.runSync(good)) // 1
+```
+
+**Signature:**
+```typescript
+function suspend<A, E, R>(effect: () => Effect<A, E, R>): Effect<A, E, R>
+```
+
+<ParamField path="effect" type="() => Effect<A, E, R>" required>
+  A thunk that returns an Effect. Evaluated lazily each time the effect runs.
+</ParamField>
+
+<ResponseField name="returns" type="Effect<A, E, R>">
+  A suspended effect that re-evaluates on each run
+</ResponseField>
+
+## Transforming Effects
+
+### map
+
+Transforms the success value of an effect.
+
+```typescript
+const doubled = Effect.succeed(21).pipe(
+  Effect.map((n) => n * 2)
+)
+// Effect<number> that succeeds with 42
+```
+
+**Signature:**
+```typescript
+function map<A, B>(f: (a: A) => B): <E, R>(self: Effect<A, E, R>) => Effect<B, E, R>
+function map<A, E, R, B>(self: Effect<A, E, R>, f: (a: A) => B): Effect<B, E, R>
+```
+
+### flatMap
+
+Chains effects to produce new `Effect` instances, useful for combining operations that depend on previous results.
+
+```typescript
+const program = Effect.succeed(10).pipe(
+  Effect.flatMap((n) => Effect.succeed(n * 2))
+)
+// Effect<number> that succeeds with 20
+```
+
+**Signature:**
+```typescript
+function flatMap<A, B, E1, R1>(
+  f: (a: A) => Effect<B, E1, R1>
+): <E, R>(self: Effect<A, E, R>) => Effect<B, E1 | E, R1 | R>
+```
+
+### andThen
+
+Chains two actions, where the second action can depend on the result of the first.
+
+```typescript
+const result = Effect.succeed(5).pipe(
+  Effect.andThen((n) => Effect.succeed(n * 2)),
+  Effect.andThen((n) => Effect.succeed(n + 10))
+)
+// Effect<number> that succeeds with 20
+```
+
+**Signature:**
+```typescript
+function andThen<A, B, E2, R2>(
+  f: (a: A) => Effect<B, E2, R2>
+): <E, R>(self: Effect<A, E, R>) => Effect<B, E | E2, R | R2>
+```
+
+## Error Handling
+
+### catchAll
+
+Handles all errors in an effect by providing a recovery effect.
+
+```typescript
+const program = Effect.fail("error").pipe(
+  Effect.catchAll((error) => Effect.succeed(`Recovered from: ${error}`))
+)
+```
+
+**Signature:**
+```typescript
+function catchAll<E, A2, E2, R2>(
+  f: (e: E) => Effect<A2, E2, R2>
+): <A, R>(self: Effect<A, E, R>) => Effect<A | A2, E2, R | R2>
+```
+
+### orElse
+
+Tries an effect, and if it fails, tries another effect.
+
+```typescript
+const fallback = Effect.fail("primary error").pipe(
+  Effect.orElse(() => Effect.succeed("fallback value"))
+)
+```
+
+**Signature:**
+```typescript
+function orElse<A2, E2, R2>(
+  that: () => Effect<A2, E2, R2>
+): <A, E, R>(self: Effect<A, E, R>) => Effect<A | A2, E2, R | R2>
+```
+
+## Running Effects
+
+### runPromise
+
+Executes an effect and returns a Promise of the result.
+
+```typescript
+const program = Effect.succeed(42)
+Effect.runPromise(program).then(console.log) // 42
+```
+
+**Signature:**
+```typescript
+function runPromise<A, E>(effect: Effect<A, E>): Promise<A>
+```
+
+### runSync
+
+Executes an effect synchronously and returns the result.
+
+```typescript
+const result = Effect.runSync(Effect.succeed(42)) // 42
+```
+
+**Signature:**
+```typescript
+function runSync<A, E>(effect: Effect<A, E>): A
+```
+
+<Warning>
+  `runSync` will throw if the effect is asynchronous or fails. Use `runPromise` for async effects.
+</Warning>
+
+## Generator Functions
+
+### gen
+
+Provides a generator-based syntax for writing effectful code.
+
+```typescript
+const program = Effect.gen(function*() {
+  const a = yield* Effect.succeed(10)
+  const b = yield* Effect.succeed(20)
+  return a + b
+})
+// Effect<number> that succeeds with 30
+```
+
+**Signature:**
+```typescript
+function gen<Eff extends YieldableError, AEff>(
+  f: (resume: Resume) => Generator<Eff, AEff, never>
+): Effect<AEff, Effect.Error<Eff>, Effect.Services<Eff>>
+```
+
+## Collecting Effects
+
+### all
+
+Runs multiple effects and collects their results.
+
+```typescript
+const program = Effect.all([
+  Effect.succeed(1),
+  Effect.succeed(2),
+  Effect.succeed(3)
+])
+// Effect<[number, number, number]>
+```
+
+**Signature:**
+```typescript
+function all<const T extends Iterable<Effect<any, any, any>>>(
+  effects: T,
+  options?: { concurrency?: Concurrency; discard?: boolean }
+): Effect</* collected results */, /* union of errors */, /* union of contexts */>
+```
+
+<ParamField path="effects" type="Iterable<Effect>" required>
+  Collection of effects to run
+</ParamField>
+
+<ParamField path="options.concurrency" type="Concurrency">
+  Controls how effects run: `"sequential"`, `"unbounded"`, or a number
+</ParamField>
+
+<ParamField path="options.discard" type="boolean" default="false">
+  If true, discards results and returns void
+</ParamField>
+
+## Type Utilities
+
+### Success
+
+Extracts the success type from an Effect.
+
+```typescript
+type MyEffect = Effect<string, Error, never>
+type SuccessType = Effect.Success<MyEffect> // string
+```
+
+### Error
+
+Extracts the error type from an Effect.
+
+```typescript
+type MyEffect = Effect<string, Error, never>
+type ErrorType = Effect.Error<MyEffect> // Error
+```
+
+### Services
+
+Extracts the context/services type from an Effect.
+
+```typescript
+type MyEffect = Effect<string, Error, { db: Database }>
+type ServicesType = Effect.Services<MyEffect> // { db: Database }
+```
+
+## Example Usage
+
+```typescript
+import { Console, Effect, Data } from "effect"
+
+class ValidationError extends Data.TaggedError("ValidationError")<{
+  message: string
+}> {}
+
+// Creating effects
+const validateAge = (age: number) =>
+  age >= 18
+    ? Effect.succeed(age)
+    : Effect.fail(new ValidationError({ message: "Must be 18 or older" }))
+
+// Composing effects
+const program = Effect.gen(function*() {
+  const age = yield* Effect.succeed(25)
+  const validated = yield* validateAge(age)
+  yield* Console.log(`Valid age: ${validated}`)
+  return validated
+})
+
+// Running the effect
+Effect.runPromise(program)
+  .then(result => console.log(`Result: ${result}`))
+  .catch(error => console.error(`Error: ${error}`))
+```

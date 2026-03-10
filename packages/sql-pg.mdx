@@ -1,0 +1,258 @@
+---
+title: "@effect/sql-pg"
+description: "PostgreSQL driver for Effect SQL"
+---
+
+## Overview
+
+`@effect/sql-pg` provides a PostgreSQL driver for Effect's SQL toolkit. It uses the `pg` library under the hood and provides full support for connection pooling, transactions, prepared statements, and PostgreSQL-specific features.
+
+## Installation
+
+<CodeGroup>
+
+```bash npm
+npm install @effect/sql-pg
+```
+
+```bash pnpm
+pnpm add @effect/sql-pg
+```
+
+```bash yarn
+yarn add @effect/sql-pg
+```
+
+</CodeGroup>
+
+## Basic Usage
+
+### Creating a Client
+
+Use the `PgClient.layer` function to create a PostgreSQL client layer:
+
+```typescript
+import { PgClient } from "@effect/sql-pg"
+import { Effect, Layer } from "effect"
+
+const SqlLive = PgClient.layer({
+  host: "localhost",
+  port: 5432,
+  database: "mydb",
+  username: "postgres",
+  password: Redacted.make("password")
+})
+```
+
+### Connection with URL
+
+You can also connect using a connection URL:
+
+```typescript
+import { Redacted } from "effect"
+
+const SqlLive = PgClient.layer({
+  url: Redacted.make("postgresql://postgres:password@localhost:5432/mydb")
+})
+```
+
+### Executing Queries
+
+```typescript
+import { Effect } from "effect"
+import { SqlClient } from "effect/unstable/sql"
+
+const program = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient
+
+  // Simple query
+  const users = yield* sql<{ id: number; name: string }>`
+    SELECT id, name FROM users WHERE active = ${true}
+  `
+
+  // Insert with helper
+  yield* sql`
+    INSERT INTO users ${sql.insert({ name: "Alice", email: "alice@example.com" })}
+  `
+
+  // Update with helper
+  yield* sql`
+    UPDATE users SET ${sql.update({ name: "Bob" })} WHERE id = ${1}
+  `
+})
+
+const runnable = program.pipe(Effect.provide(SqlLive))
+```
+
+## Configuration Options
+
+### Connection Options
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `url` | `Redacted` | PostgreSQL connection URL |
+| `host` | `string` | Database host |
+| `port` | `number` | Database port (default: 5432) |
+| `database` | `string` | Database name |
+| `username` | `string` | Username for authentication |
+| `password` | `Redacted` | Password for authentication |
+| `ssl` | `boolean \| ConnectionOptions` | Enable SSL/TLS connection |
+| `path` | `string` | Unix socket path |
+
+### Connection Pool Options
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `maxConnections` | `number` | Maximum number of connections in the pool |
+| `minConnections` | `number` | Minimum number of connections to maintain |
+| `connectionTTL` | `Duration.Input` | Time-to-live for connections |
+| `idleTimeout` | `Duration.Input` | How long a connection can be idle |
+| `connectTimeout` | `Duration.Input` | Timeout for establishing connections (default: 5s) |
+
+### Transform Options
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `transformResultNames` | `(str: string) => string` | Transform column names in results |
+| `transformQueryNames` | `(str: string) => string` | Transform identifiers in queries |
+| `transformJson` | `boolean` | Apply transformations to JSON fields |
+
+### Advanced Options
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `applicationName` | `string` | Application name for PostgreSQL (default: "@effect/sql-pg") |
+| `spanAttributes` | `Record<string, unknown>` | Custom telemetry attributes |
+| `types` | `Pg.CustomTypesConfig` | Custom PostgreSQL type configuration |
+
+## PostgreSQL-Specific Features
+
+### JSON Support
+
+Handle JSON/JSONB columns with proper encoding:
+
+```typescript
+const sql = yield* PgClient.PgClient
+
+const data = { key: "value", nested: { field: 123 } }
+yield* sql`
+  INSERT INTO documents (data) VALUES (${sql.json(data)})
+`
+```
+
+### LISTEN/NOTIFY
+
+Subscribe to PostgreSQL notifications:
+
+```typescript
+import { Stream } from "effect"
+
+const program = Effect.gen(function* () {
+  const sql = yield* PgClient.PgClient
+
+  // Listen for notifications
+  const notifications = sql.listen("my_channel")
+
+  yield* Stream.runForEach(notifications, (payload) =>
+    Effect.log(`Received: ${payload}`)
+  )
+})
+```
+
+Send notifications:
+
+```typescript
+const sql = yield* PgClient.PgClient
+yield* sql.notify("my_channel", "Hello, World!")
+```
+
+### Transactions
+
+Automatic transaction management:
+
+```typescript
+const sql = yield* SqlClient.SqlClient
+
+const result = yield* sql.withTransaction(
+  Effect.gen(function* () {
+    yield* sql`INSERT INTO accounts (balance) VALUES (${100})`
+    yield* sql`UPDATE accounts SET balance = balance - ${50} WHERE id = ${1}`
+    return yield* sql<{ balance: number }>`SELECT balance FROM accounts WHERE id = ${1}`
+  })
+)
+```
+
+## Name Transformations
+
+Automatically convert between naming conventions:
+
+```typescript
+import { String } from "effect"
+
+const SqlLive = PgClient.layer({
+  host: "localhost",
+  database: "mydb",
+  // Transform camelCase to snake_case for queries
+  transformQueryNames: String.camelToSnake,
+  // Transform snake_case to camelCase for results
+  transformResultNames: String.snakeToCamel
+})
+
+// Use camelCase in your code
+const users = yield* sql<{ userId: number; firstName: string }>`
+  SELECT userId, firstName FROM users
+`
+// Queries become: SELECT user_id, first_name FROM users
+```
+
+## Error Handling
+
+All SQL errors are wrapped in `SqlError`:
+
+```typescript
+import { SqlError } from "effect/unstable/sql"
+
+const program = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient
+  return yield* sql`SELECT * FROM users`
+}).pipe(
+  Effect.catchTag("SqlError", (error) =>
+    Effect.log(`Database error: ${error.message}`)
+  )
+)
+```
+
+## Streaming Results
+
+Stream large result sets efficiently:
+
+```typescript
+import { Stream } from "effect"
+
+const program = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient
+
+  const users = sql.stream<{ id: number; name: string }>`
+    SELECT id, name FROM users
+  `
+
+  yield* Stream.runForEach(users, (user) =>
+    Effect.log(`Processing user: ${user.name}`)
+  )
+})
+```
+
+## Type Safety
+
+The client is fully typed with Effect's type system:
+
+```typescript
+interface User {
+  id: number
+  name: string
+  email: string
+}
+
+const users = yield* sql<User>`SELECT * FROM users`
+// users: ReadonlyArray<User>
+```

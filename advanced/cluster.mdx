@@ -1,0 +1,198 @@
+---
+title: "Cluster Entities"
+description: "Build distributed applications with stateful entities and RPC-based messaging"
+icon: "network-wired"
+---
+
+The `effect/unstable/cluster` module enables building distributed applications by modeling stateful services as entities. Entities are location-transparent actors that communicate via typed RPC messages and can be distributed across multiple machines.
+
+## Defining entities
+
+Entities are defined using RPC schemas and handlers. Each entity has a unique type and processes messages through typed RPC methods.
+
+```typescript
+import { Effect, Ref, Schema } from "effect"
+import { ClusterSchema, Entity } from "effect/unstable/cluster"
+import { Rpc } from "effect/unstable/rpc"
+
+// Define RPC messages
+export const Increment = Rpc.make("Increment", {
+  payload: { amount: Schema.Number },
+  success: Schema.Number
+})
+
+export const GetCount = Rpc.make("GetCount", {
+  success: Schema.Number
+})
+
+// Create entity from RPC definitions
+export const Counter = Entity.make("Counter", [Increment, GetCount])
+```
+
+## Entity handlers
+
+Entity handlers maintain in-memory state and process messages sequentially. Use `Entity.toLayer` to create a handler layer.
+
+```typescript
+import { Effect, Layer, Ref } from "effect"
+
+export const CounterEntityLayer = Counter.toLayer(
+  Effect.gen(function*() {
+    // Initialize entity state
+    const count = yield* Ref.make(0)
+
+    return Counter.of({
+      Increment: ({ payload }) => 
+        Ref.updateAndGet(count, (current) => current + payload.amount),
+      
+      GetCount: () => Ref.get(count)
+    })
+  }),
+  { maxIdleTime: "5 minutes" }
+)
+```
+
+### Passivation
+
+The `maxIdleTime` option controls entity passivation. When an entity is idle for the specified duration, it is stopped and its state is cleared. The entity will be recreated on demand when new messages arrive.
+
+## Persisted messages
+
+By default, messages are volatile and only sent over the network. Use `ClusterSchema.Persisted` to persist messages for recovery.
+
+```typescript
+export const GetCount = Rpc.make("GetCount", {
+  success: Schema.Number
+}).annotate(ClusterSchema.Persisted, true)
+```
+
+Persisted messages are stored in the cluster's persistence layer and can be replayed after failures.
+
+## Concurrent handlers
+
+By default, all handlers for an entity run sequentially. Use `Rpc.fork` to allow a handler to run concurrently with other handlers.
+
+```typescript
+export const CounterEntityLayer = Counter.toLayer(
+  Effect.gen(function*() {
+    const count = yield* Ref.make(0)
+
+    return Counter.of({
+      Increment: ({ payload }) => 
+        Ref.updateAndGet(count, (current) => current + payload.amount),
+      
+      // GetCount can run concurrently with Increment
+      GetCount: () => 
+        Ref.get(count).pipe(Rpc.fork)
+    })
+  }),
+  { maxIdleTime: "5 minutes" }
+)
+```
+
+## Using entity clients
+
+Access entities using the client interface. Clients are location-transparent and automatically route messages to the correct entity instance.
+
+```typescript
+export const useCounter = Effect.gen(function*() {
+  const clientFor = yield* Counter.client
+  const counter = clientFor("counter-123")
+
+  // Send messages to the entity
+  const afterIncrement = yield* counter.Increment({ amount: 1 })
+  const currentCount = yield* counter.GetCount()
+
+  console.log(`Count: ${currentCount}`)
+})
+```
+
+Entity IDs determine which entity instance handles the message. The cluster automatically distributes entities across available nodes.
+
+## Cluster configuration
+
+Set up your cluster using `NodeClusterSocket.layer` for production or `TestRunner.layer` for testing.
+
+```typescript
+import { NodeClusterSocket } from "@effect/platform-node"
+import { Layer } from "effect"
+import type { SqlClient } from "effect/unstable/sql"
+
+// Production cluster layer
+declare const SqlClientLayer: Layer.Layer<SqlClient.SqlClient>
+
+const ClusterLayer = NodeClusterSocket.layer().pipe(
+  Layer.provide(SqlClientLayer)
+)
+
+// Merge entity layers
+const EntitiesLayer = Layer.mergeAll(
+  CounterEntityLayer
+  // ... more entity layers
+)
+
+// Provide cluster to entities
+const ProductionLayer = EntitiesLayer.pipe(
+  Layer.provide(ClusterLayer)
+)
+```
+
+## Testing entities
+
+Use `TestRunner.layer` for testing without network communication or external storage.
+
+```typescript
+import { TestRunner } from "effect/unstable/cluster"
+import { Layer } from "effect"
+
+// Test layer with in-memory storage
+const ClusterLayerTest = TestRunner.layer
+
+export const TestLayer = EntitiesLayer.pipe(
+  // Tests can access storage and cluster services directly
+  Layer.provideMerge(ClusterLayerTest)
+)
+```
+
+The test layer simulates cluster behavior in a single process, making it ideal for unit tests and local development.
+
+## Running your cluster
+
+Launch your cluster application with the configured layers.
+
+```typescript
+import { NodeRuntime } from "@effect/platform-node"
+import { Layer } from "effect"
+
+Layer.launch(ProductionLayer).pipe(
+  NodeRuntime.runMain
+)
+```
+
+## Key concepts
+
+<CardGroup cols={2}>
+  <Card title="Location transparency" icon="location-dot">
+    Entities can move between nodes transparently. Clients don't need to know where an entity is running.
+  </Card>
+  
+  <Card title="Message ordering" icon="list-ol">
+    Messages to the same entity are processed sequentially by default, ensuring consistent state updates.
+  </Card>
+  
+  <Card title="Automatic sharding" icon="table-cells">
+    The cluster automatically distributes entities across nodes based on their IDs.
+  </Card>
+  
+  <Card title="Persistence" icon="database">
+    Annotate messages with `ClusterSchema.Persisted` to enable message replay after failures.
+  </Card>
+</CardGroup>
+
+<Note>
+The cluster module is in the `unstable` namespace. The API may change in future versions.
+</Note>
+
+<Tip>
+Start with `TestRunner.layer` during development, then switch to `NodeClusterSocket.layer` for production deployment.
+</Tip>

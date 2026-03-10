@@ -1,0 +1,591 @@
+---
+title: HttpServer
+description: Building HTTP servers with Effect
+---
+
+The `HttpServer` module provides abstractions for building HTTP servers with Effect. It offers a composable, type-safe way to define server applications with middleware support and automatic resource management.
+
+## Overview
+
+HttpServer features:
+- Composable middleware architecture
+- Automatic scope management
+- Type-safe request/response handling
+- Platform-agnostic abstractions
+- Built-in static file serving
+- Testing utilities
+
+## Basic Usage
+
+```ts
+import { Effect, HttpServer, HttpServerResponse } from "effect"
+
+const app = Effect.gen(function*() {
+  const request = yield* HttpServerRequest.HttpServerRequest
+  
+  return HttpServerResponse.json({
+    message: "Hello, World!",
+    path: request.url
+  })
+})
+
+const server = HttpServer.serve(app)
+```
+
+## Server Setup
+
+### `serve`
+
+Creates a Layer that serves an HTTP application.
+
+```ts
+serve: {
+  (): <E, R>(
+    effect: Effect.Effect<HttpServerResponse, E, R>
+  ) => Layer.Layer<never, never, HttpServer | Exclude<R, HttpServerRequest | Scope>>
+  
+  <E, R, App>(
+    middleware: HttpMiddleware.Applied<App, E, R>
+  ): (effect: Effect.Effect<HttpServerResponse, E, R>) => Layer.Layer<...>
+  
+  <E, R>(
+    effect: Effect.Effect<HttpServerResponse, E, R>
+  ): Layer.Layer<never, never, HttpServer | Exclude<R, HttpServerRequest | Scope>>
+  
+  <E, R, App>(
+    effect: Effect.Effect<HttpServerResponse, E, R>,
+    middleware: HttpMiddleware.Applied<App, E, R>
+  ): Layer.Layer<...>
+}
+```
+
+**Example:**
+```ts
+import { Effect, HttpServer, HttpServerResponse, Layer } from "effect"
+
+const app = HttpServerResponse.text("Hello!")
+
+const ServerLive = HttpServer.serve(app)
+
+const program = Effect.gen(function*() {
+  yield* Effect.log("Server is running...")
+  yield* Effect.never // Keep server alive
+})
+
+const runnable = Effect.provide(program, ServerLive)
+```
+
+### `serveEffect`
+
+Serves an HTTP application as an Effect.
+
+```ts
+serveEffect: {
+  <E, R>(
+    effect: Effect.Effect<HttpServerResponse, E, R>
+  ): Effect.Effect<void, never, Scope | HttpServer | Exclude<R, HttpServerRequest>>
+}
+```
+
+**Example:**
+```ts
+import { Effect, HttpServer, HttpServerResponse } from "effect"
+
+const app = HttpServerResponse.text("Hello!")
+
+const program = Effect.scoped(
+  Effect.gen(function*() {
+    yield* HttpServer.serveEffect(app)
+    yield* Effect.log("Server started")
+    yield* Effect.never
+  })
+)
+```
+
+## Address Information
+
+### Server Address Types
+
+Servers can bind to TCP or Unix socket addresses:
+
+```ts
+type Address = TcpAddress | UnixAddress
+
+interface TcpAddress {
+  readonly _tag: "TcpAddress"
+  readonly hostname: string
+  readonly port: number
+}
+
+interface UnixAddress {
+  readonly _tag: "UnixAddress"
+  readonly path: string
+}
+```
+
+### `formatAddress`
+
+Formats a server address as a string.
+
+```ts
+formatAddress: (address: Address) => string
+```
+
+**Example:**
+```ts
+import { HttpServer } from "effect"
+
+const tcpAddr: HttpServer.TcpAddress = {
+  _tag: "TcpAddress",
+  hostname: "localhost",
+  port: 3000
+}
+
+const formatted = HttpServer.formatAddress(tcpAddr)
+// "http://localhost:3000"
+
+const unixAddr: HttpServer.UnixAddress = {
+  _tag: "UnixAddress",
+  path: "/tmp/server.sock"
+}
+
+const unixFormatted = HttpServer.formatAddress(unixAddr)
+// "unix:///tmp/server.sock"
+```
+
+### `logAddress`
+
+Logs the server address when it starts.
+
+```ts
+logAddress: Effect.Effect<void, never, HttpServer>
+```
+
+**Example:**
+```ts
+import { Effect, HttpServer, Layer } from "effect"
+
+const ServerLive = HttpServer.serve(app).pipe(
+  Layer.tap(() => HttpServer.logAddress)
+)
+```
+
+### `withLogAddress`
+
+Wraps a layer to log the server address on startup.
+
+```ts
+withLogAddress: <A, E, R>(
+  layer: Layer.Layer<A, E, R>
+) => Layer.Layer<A, E, R | Exclude<HttpServer, A>>
+```
+
+**Example:**
+```ts
+import { HttpServer, Layer } from "effect"
+
+const ServerLive = Layer.mergeAll(
+  HttpServer.serve(app),
+  PlatformNode.layer
+).pipe(
+  HttpServer.withLogAddress
+)
+// Logs: "Listening on http://localhost:3000"
+```
+
+## Creating Custom Servers
+
+### `make`
+
+Creates a custom HttpServer implementation.
+
+```ts
+make: (
+  options: {
+    readonly serve: (
+      httpEffect: Effect.Effect<HttpServerResponse, unknown, HttpServerRequest | Scope>,
+      middleware?: HttpMiddleware
+    ) => Effect.Effect<void, never, Scope>
+    readonly address: Address
+  }
+) => HttpServer["Service"]
+```
+
+**Example:**
+```ts
+import { Effect, HttpServer, Scope } from "effect"
+
+const customServer = HttpServer.make({
+  address: {
+    _tag: "TcpAddress",
+    hostname: "0.0.0.0",
+    port: 8080
+  },
+  serve: (httpEffect, middleware) =>
+    Effect.scoped(
+      Effect.gen(function*() {
+        // Custom server implementation
+        // Set up HTTP listener
+        // Process requests with httpEffect
+      })
+    )
+})
+```
+
+## Request Handling
+
+### Accessing the Request
+
+```ts
+import { Effect, HttpServerRequest, HttpServerResponse } from "effect"
+
+const app = Effect.gen(function*() {
+  const request = yield* HttpServerRequest.HttpServerRequest
+  
+  return HttpServerResponse.json({
+    method: request.method,
+    url: request.url,
+    headers: request.headers
+  })
+})
+```
+
+### Request Properties
+
+```ts
+interface HttpServerRequest {
+  readonly url: string
+  readonly originalUrl: string
+  readonly method: HttpMethod
+  readonly headers: Headers
+  readonly cookies: ReadonlyRecord<string, string>
+  readonly remoteAddress: Option<string>
+  
+  // Body parsing
+  readonly json: Effect.Effect<unknown, HttpServerError>
+  readonly text: Effect.Effect<string, HttpServerError>
+  readonly arrayBuffer: Effect.Effect<ArrayBuffer, HttpServerError>
+  readonly formData: Effect.Effect<FormData, HttpServerError>
+  
+  // Multipart
+  readonly multipart: Effect.Effect<Multipart.Persisted, MultipartError, Scope | FileSystem | Path>
+  readonly multipartStream: Stream.Stream<Multipart.Part, MultipartError>
+  
+  // WebSocket upgrade
+  readonly upgrade: Effect.Effect<Socket, HttpServerError>
+}
+```
+
+## Response Creation
+
+See the HttpServerResponse module for comprehensive response APIs:
+
+```ts
+import { HttpServerResponse } from "effect"
+
+// Text response
+const text = HttpServerResponse.text("Hello!")
+
+// JSON response
+const json = HttpServerResponse.json({ message: "Success" })
+
+// HTML response
+const html = HttpServerResponse.html("<h1>Hello</h1>")
+
+// File response
+const file = HttpServerResponse.file("./public/index.html")
+
+// Stream response
+const stream = HttpServerResponse.stream(dataStream)
+
+// Custom response
+const custom = HttpServerResponse.make({
+  status: 201,
+  headers: Headers.fromInput({ "content-type": "application/json" }),
+  body: HttpBody.json({ id: 123 })
+})
+```
+
+## Middleware
+
+Middleware allows composing cross-cutting concerns:
+
+```ts
+import { Effect, HttpServer, HttpServerRequest, HttpServerResponse } from "effect"
+
+// Logging middleware
+const loggingMiddleware = HttpMiddleware.make((app) =>
+  Effect.gen(function*() {
+    const request = yield* HttpServerRequest.HttpServerRequest
+    yield* Effect.log(`${request.method} ${request.url}`)
+    
+    const response = yield* app
+    yield* Effect.log(`Response: ${response.status}`)
+    
+    return response
+  })
+)
+
+// Apply middleware
+const ServerLive = HttpServer.serve(app, loggingMiddleware)
+```
+
+## Testing
+
+### `makeTestClient`
+
+Creates an HttpClient configured to make requests to the test server.
+
+```ts
+makeTestClient: Effect.Effect<
+  HttpClient.HttpClient,
+  never,
+  HttpServer | HttpClient.HttpClient
+>
+```
+
+**Example:**
+```ts
+import { Effect, HttpClient, HttpServer, HttpServerResponse, Layer } from "effect"
+
+const app = HttpServerResponse.json({ message: "Hello!" })
+
+const test = Effect.gen(function*() {
+  const client = yield* HttpServer.makeTestClient
+  
+  const response = yield* client.get("/api/users")
+  const data = yield* response.json
+  
+  // Assert response...
+}).pipe(
+  Effect.provide(HttpServer.serve(app))
+)
+```
+
+### `layerTestClient`
+
+A Layer version of makeTestClient.
+
+```ts
+layerTestClient: Layer.Layer<
+  HttpClient.HttpClient,
+  never,
+  HttpServer | HttpClient.HttpClient
+>
+```
+
+**Example:**
+```ts
+import { Effect, HttpClient, HttpServer, Layer } from "effect"
+
+const app = HttpServerResponse.text("Hello!")
+
+const TestLive = Layer.mergeAll(
+  HttpServer.serve(app),
+  HttpServer.layerTestClient,
+  HttpClient.layer
+)
+
+const test = Effect.gen(function*() {
+  const client = yield* HttpClient.HttpClient
+  const response = yield* client.get("/")
+  const text = yield* response.text
+  // Assert text === "Hello!"
+}).pipe(
+  Effect.provide(TestLive)
+)
+```
+
+### `layerServices`
+
+Provides default platform services for testing.
+
+```ts
+layerServices: Layer.Layer<
+  Path.Path | HttpPlatform.HttpPlatform | FileSystem.FileSystem | Etag.Generator
+>
+```
+
+**Example:**
+```ts
+import { Effect, HttpServer, Layer } from "effect"
+
+const TestLive = Layer.mergeAll(
+  HttpServer.serve(app),
+  HttpServer.layerServices
+)
+```
+
+## Router Integration
+
+HttpServer works seamlessly with HttpRouter for routing:
+
+```ts
+import { Effect, HttpRouter, HttpServer, HttpServerResponse } from "effect"
+
+const router = HttpRouter.empty.pipe(
+  HttpRouter.get("/", HttpServerResponse.text("Home")),
+  HttpRouter.get("/users", 
+    Effect.map(
+      getUsersFromDb,
+      (users) => HttpServerResponse.json(users)
+    )
+  ),
+  HttpRouter.post("/users",
+    Effect.gen(function*() {
+      const request = yield* HttpServerRequest.HttpServerRequest
+      const body = yield* request.json
+      const user = yield* createUser(body)
+      return HttpServerResponse.json(user, { status: 201 })
+    })
+  )
+)
+
+const ServerLive = HttpServer.serve(
+  HttpRouter.toHttpApp(router)
+)
+```
+
+## Static Files
+
+Serve static files with HttpStaticServer:
+
+```ts
+import { HttpRouter, HttpServer, HttpStaticServer } from "effect"
+
+const router = HttpRouter.empty.pipe(
+  HttpRouter.mount("/static", HttpStaticServer.fromDirectory("./public"))
+)
+
+const ServerLive = HttpServer.serve(
+  HttpRouter.toHttpApp(router)
+)
+```
+
+## WebSocket Support
+
+Upgrade connections to WebSocket:
+
+```ts
+import { Effect, HttpServerRequest, Socket, Stream } from "effect"
+
+const wsHandler = Effect.gen(function*() {
+  const request = yield* HttpServerRequest.HttpServerRequest
+  const socket = yield* request.upgrade
+  
+  // Echo server
+  yield* Stream.run(
+    socket.stream,
+    Socket.toChannel(socket)
+  )
+})
+```
+
+## Platform Implementations
+
+HttpServer is platform-agnostic. Use platform-specific layers:
+
+### Node.js
+
+```ts
+import { Effect, HttpServer } from "effect"
+import { NodeHttpServer, NodeRuntime } from "@effect/platform-node"
+
+const ServerLive = HttpServer.serve(app).pipe(
+  Layer.provide(NodeHttpServer.layer({ port: 3000 }))
+)
+
+const program = Effect.provide(myProgram, ServerLive)
+
+NodeRuntime.runMain(program)
+```
+
+### Bun
+
+```ts
+import { HttpServer } from "effect"
+import { BunHttpServer, BunRuntime } from "@effect/platform-bun"
+
+const ServerLive = HttpServer.serve(app).pipe(
+  Layer.provide(BunHttpServer.layer({ port: 3000 }))
+)
+
+BunRuntime.runMain(Effect.provide(myProgram, ServerLive))
+```
+
+## Complete Example
+
+```ts
+import { Console, Effect, HttpRouter, HttpServer, HttpServerResponse, Layer } from "effect"
+import { NodeHttpServer, NodeRuntime } from "@effect/platform-node"
+
+// Define routes
+const router = HttpRouter.empty.pipe(
+  HttpRouter.get("/", HttpServerResponse.text("Welcome!")),
+  
+  HttpRouter.get("/users",
+    Effect.gen(function*() {
+      const users = yield* getUsersFromDb
+      return HttpServerResponse.json(users)
+    })
+  ),
+  
+  HttpRouter.post("/users",
+    Effect.gen(function*() {
+      const request = yield* HttpServerRequest.HttpServerRequest
+      const data = yield* request.json
+      const user = yield* createUser(data)
+      return HttpServerResponse.json(user, { status: 201 })
+    })
+  )
+)
+
+// Create server layer
+const ServerLive = HttpServer.serve(HttpRouter.toHttpApp(router)).pipe(
+  Layer.provide(NodeHttpServer.layer({ port: 3000 })),
+  HttpServer.withLogAddress
+)
+
+// Run server
+const program = Effect.gen(function*() {
+  yield* Console.log("Server starting...")
+  yield* Effect.never
+})
+
+NodeRuntime.runMain(
+  Effect.provide(program, ServerLive)
+)
+```
+
+## Type Reference
+
+### HttpServer
+
+```ts
+class HttpServer extends Service<HttpServer, {
+  readonly serve: {
+    <E, R>(effect: Effect.Effect<HttpServerResponse, E, R>): Effect.Effect<
+      void,
+      never,
+      Exclude<R, HttpServerRequest> | Scope
+    >
+    <E, R, App>(
+      effect: Effect.Effect<HttpServerResponse, E, R>,
+      middleware: HttpMiddleware.Applied<App, E, R>
+    ): Effect.Effect<
+      void,
+      never,
+      Exclude<R, HttpServerRequest> | Scope
+    >
+  }
+  readonly address: Address
+}> {}
+```
+
+## See Also
+
+- [HttpServerRequest](/api/http-server-request) - Request handling
+- [HttpServerResponse](/api/http-server-response) - Response creation
+- [HttpRouter](/api/http-router) - Request routing
+- [HttpMiddleware](/api/http-middleware) - Middleware composition
+- [Layer](/api/layer) - Dependency injection

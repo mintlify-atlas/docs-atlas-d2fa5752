@@ -1,0 +1,486 @@
+---
+title: "SQL"
+description: "Unstable SQL module for database operations with Effect"
+---
+
+<Warning>
+  The SQL module is marked as **unstable**, meaning its APIs may change in minor version releases. Use caution when upgrading Effect versions.
+</Warning>
+
+## Overview
+
+The `effect/unstable/sql` module provides a type-safe, effect-based interface for working with SQL databases. It offers connection management, query building, transactions, migrations, and reactive queries with full Effect integration.
+
+## Installation
+
+```bash
+npm install effect
+```
+
+## Key Modules
+
+### SqlClient
+
+The core service for executing SQL queries.
+
+```typescript
+import { Effect } from "effect"
+import { SqlClient } from "effect/unstable/sql"
+
+// Execute a query
+const program = Effect.gen(function*() {
+  const sql = yield* SqlClient.SqlClient
+  
+  // Simple query
+  const users = yield* sql`
+    SELECT * FROM users WHERE age > ${18}
+  `
+  
+  return users
+})
+```
+
+**Key Methods:**
+- `sql(template)` - Execute a SQL query with template literals
+- `reserve` - Reserve a connection from the pool
+- `withTransaction(effect)` - Run an effect in a transaction
+- `reactive(keys, effect)` - Create reactive queries
+- `withoutTransforms()` - Get client without row transformations
+
+### Statement
+
+Build and compose SQL statements.
+
+```typescript
+import { SqlClient, Statement } from "effect/unstable/sql"
+import { Effect } from "effect"
+
+const program = Effect.gen(function*() {
+  const sql = yield* SqlClient.SqlClient
+  
+  // Build a statement
+  const stmt = Statement.make`
+    SELECT id, name, email
+    FROM users
+    WHERE status = ${'active'}
+    ORDER BY created_at DESC
+  `
+  
+  // Execute the statement
+  const results = yield* sql(stmt)
+  
+  return results
+})
+```
+
+**Statement Operations:**
+- `Statement.make` - Create a new SQL statement
+- `Statement.append` - Append to a statement
+- `Statement.compile` - Compile to final SQL
+- `Statement.values` - Extract parameter values
+
+### SqlConnection
+
+Manage database connections with scope-based lifecycle.
+
+```typescript
+import { Effect, Scope } from "effect"
+import { SqlClient, SqlConnection } from "effect/unstable/sql"
+
+const program = Effect.gen(function*() {
+  const sql = yield* SqlClient.SqlClient
+  
+  // Reserve a connection for multiple operations
+  const connection = yield* sql.reserve
+  
+  // Use the connection
+  const result1 = yield* connection`SELECT * FROM users`
+  const result2 = yield* connection`SELECT * FROM posts`
+  
+  // Connection is automatically released
+  return { result1, result2 }
+}).pipe(Effect.scoped)
+```
+
+### Transactions
+
+Execute operations within ACID transactions.
+
+```typescript
+import { Effect } from "effect"
+import { SqlClient } from "effect/unstable/sql"
+
+const transferMoney = (
+  fromAccount: string,
+  toAccount: string,
+  amount: number
+) => Effect.gen(function*() {
+  const sql = yield* SqlClient.SqlClient
+  
+  // All queries run in a transaction
+  return yield* sql.withTransaction(
+    Effect.gen(function*() {
+      // Debit from account
+      yield* sql`
+        UPDATE accounts
+        SET balance = balance - ${amount}
+        WHERE id = ${fromAccount}
+      `
+      
+      // Credit to account
+      yield* sql`
+        UPDATE accounts
+        SET balance = balance + ${amount}
+        WHERE id = ${toAccount}
+      `
+      
+      return { success: true }
+    })
+  )
+})
+```
+
+### SqlSchema
+
+Define schemas for type-safe database operations.
+
+```typescript
+import { Schema } from "effect"
+import { SqlSchema } from "effect/unstable/sql"
+
+// Define a user schema
+const UserSchema = Schema.Struct({
+  id: Schema.Number,
+  name: Schema.String,
+  email: Schema.String,
+  createdAt: Schema.Date
+})
+
+type User = Schema.Schema.Type<typeof UserSchema>
+
+// Use schema for parsing results
+const getUsers = Effect.gen(function*() {
+  const sql = yield* SqlClient.SqlClient
+  
+  const rows = yield* sql`SELECT * FROM users`
+  
+  // Parse and validate results
+  const users = yield* Effect.forEach(
+    rows,
+    Schema.decode(UserSchema)
+  )
+  
+  return users
+})
+```
+
+### SqlModel
+
+Create repository-style interfaces for database entities.
+
+```typescript
+import { Effect, Schema } from "effect"
+import { SqlClient, SqlModel } from "effect/unstable/sql"
+
+// Define model
+const UserModel = SqlModel.make({
+  table: "users",
+  schema: Schema.Struct({
+    id: Schema.Number,
+    name: Schema.String,
+    email: Schema.String,
+    createdAt: Schema.Date
+  }),
+  primaryKey: "id"
+})
+
+// Use the model
+const program = Effect.gen(function*() {
+  const users = yield* UserModel.findAll
+  const user = yield* UserModel.findById(123)
+  
+  yield* UserModel.insert({
+    name: "Alice",
+    email: "alice@example.com",
+    createdAt: new Date()
+  })
+  
+  yield* UserModel.update(123, {
+    name: "Alice Smith"
+  })
+  
+  yield* UserModel.delete(123)
+  
+  return users
+})
+```
+
+### Migrator
+
+Manage database schema migrations.
+
+```typescript
+import { Effect } from "effect"
+import { SqlClient, Migrator } from "effect/unstable/sql"
+
+// Define migrations
+const migrations = [
+  {
+    id: 1,
+    name: "create-users-table",
+    up: Effect.gen(function*() {
+      const sql = yield* SqlClient.SqlClient
+      yield* sql`
+        CREATE TABLE users (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          name TEXT NOT NULL,
+          email TEXT UNIQUE NOT NULL,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+      `
+    })
+  },
+  {
+    id: 2,
+    name: "add-users-status",
+    up: Effect.gen(function*() {
+      const sql = yield* SqlClient.SqlClient
+      yield* sql`
+        ALTER TABLE users ADD COLUMN status TEXT DEFAULT 'active'
+      `
+    })
+  }
+]
+
+// Run migrations
+const runMigrations = Effect.gen(function*() {
+  const migrator = yield* Migrator.make({
+    migrations,
+    table: "_migrations"
+  })
+  
+  yield* migrator.up() // Run pending migrations
+  
+  return { success: true }
+})
+```
+
+### SqlResolver
+
+Create data loaders for efficient batch queries.
+
+```typescript
+import { Effect } from "effect"
+import { SqlClient, SqlResolver } from "effect/unstable/sql"
+
+// Define a resolver for batching user queries
+const UserResolver = SqlResolver.make({
+  id: "UserResolver",
+  load: (ids: ReadonlyArray<number>) =>
+    Effect.gen(function*() {
+      const sql = yield* SqlClient.SqlClient
+      
+      const users = yield* sql`
+        SELECT * FROM users WHERE id IN ${sql.in(ids)}
+      `
+      
+      // Return map of id -> user
+      return new Map(
+        users.map(user => [user.id, user])
+      )
+    })
+})
+
+// Use resolver
+const program = Effect.gen(function*() {
+  // These will be batched into a single query
+  const user1 = yield* UserResolver.get(1)
+  const user2 = yield* UserResolver.get(2)
+  const user3 = yield* UserResolver.get(3)
+  
+  return [user1, user2, user3]
+})
+```
+
+### SqlStream
+
+Stream large result sets efficiently.
+
+```typescript
+import { Effect, Stream } from "effect"
+import { SqlClient, SqlStream } from "effect/unstable/sql"
+
+const program = Effect.gen(function*() {
+  const sql = yield* SqlClient.SqlClient
+  
+  // Stream results instead of loading all at once
+  const userStream = SqlStream.make(
+    sql`SELECT * FROM users ORDER BY created_at`
+  )
+  
+  // Process stream
+  yield* userStream.pipe(
+    Stream.tap(user => Effect.log(`Processing user: ${user.name}`)),
+    Stream.runDrain
+  )
+})
+```
+
+### Reactive Queries
+
+Create queries that automatically update when data changes.
+
+```typescript
+import { Effect, Stream } from "effect"
+import { SqlClient } from "effect/unstable/sql"
+
+const program = Effect.gen(function*() {
+  const sql = yield* SqlClient.SqlClient
+  
+  // Create reactive query
+  const usersStream = sql.reactive(
+    ["users"], // Keys to watch
+    sql`SELECT * FROM users`
+  )
+  
+  // Subscribe to updates
+  yield* usersStream.pipe(
+    Stream.tap(users => Effect.log(`Users updated: ${users.length}`)),
+    Stream.take(5), // Take first 5 updates
+    Stream.runDrain
+  )
+})
+```
+
+### SqlError
+
+Handle SQL-specific errors.
+
+```typescript
+import { Effect, Match } from "effect"
+import type { SqlError } from "effect/unstable/sql"
+
+const handleSqlError = Match.type<SqlError>().pipe(
+  Match.when(
+    { _tag: "ConnectionError" },
+    (err) => Effect.logError(`Connection failed: ${err.message}`)
+  ),
+  Match.when(
+    { _tag: "QueryError" },
+    (err) => Effect.logError(`Query failed: ${err.sql}`)
+  ),
+  Match.when(
+    { _tag: "TransactionError" },
+    (err) => Effect.logError(`Transaction failed: ${err.message}`)
+  ),
+  Match.orElse((err) => Effect.logError(`SQL error: ${err}`))
+)
+```
+
+## Complete Example
+
+Here's a complete blog application with SQL:
+
+```typescript
+import { Effect, Schema, Layer } from "effect"
+import { SqlClient, SqlModel, Migrator } from "effect/unstable/sql"
+
+// Define schemas
+const PostSchema = Schema.Struct({
+  id: Schema.Number,
+  title: Schema.String,
+  content: Schema.String,
+  authorId: Schema.Number,
+  createdAt: Schema.Date
+})
+
+type Post = Schema.Schema.Type<typeof PostSchema>
+
+// Define model
+const PostModel = SqlModel.make({
+  table: "posts",
+  schema: PostSchema,
+  primaryKey: "id"
+})
+
+// Migrations
+const migrations = [
+  {
+    id: 1,
+    name: "create-posts-table",
+    up: Effect.gen(function*() {
+      const sql = yield* SqlClient.SqlClient
+      yield* sql`
+        CREATE TABLE posts (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          title TEXT NOT NULL,
+          content TEXT NOT NULL,
+          author_id INTEGER NOT NULL,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+      `
+    })
+  }
+]
+
+// Application
+const program = Effect.gen(function*() {
+  // Run migrations
+  const migrator = yield* Migrator.make({ migrations, table: "_migrations" })
+  yield* migrator.up()
+  
+  // Create a post
+  const post = yield* PostModel.insert({
+    title: "Hello Effect!",
+    content: "This is my first post using Effect SQL",
+    authorId: 1,
+    createdAt: new Date()
+  })
+  
+  // Find all posts
+  const posts = yield* PostModel.findAll
+  
+  // Update a post
+  yield* PostModel.update(post.id, {
+    title: "Hello Effect SQL!"
+  })
+  
+  // Delete a post
+  yield* PostModel.delete(post.id)
+  
+  return posts
+})
+
+// Run with a SQL client layer (e.g., SQLite, PostgreSQL, MySQL)
+Effect.runPromise(
+  program.pipe(
+    Effect.provide(sqliteClientLayer)
+  )
+)
+```
+
+## Database-Specific Implementations
+
+The SQL module supports multiple databases:
+
+- **SQLite** - `@effect/sql-sqlite`
+- **PostgreSQL** - `@effect/sql-pg`
+- **MySQL** - `@effect/sql-mysql`
+- **MS SQL Server** - `@effect/sql-mssql`
+
+## Best Practices
+
+1. **Connections** - Use connection pools for production applications
+2. **Transactions** - Wrap related operations in transactions
+3. **Schemas** - Define schemas for type safety and validation
+4. **Migrations** - Version control your database schema
+5. **Streaming** - Use SqlStream for large result sets
+6. **Batching** - Use SqlResolver to batch queries efficiently
+7. **Error Handling** - Handle SQL errors with proper logging
+8. **Security** - Always use parameterized queries (template literals handle this)
+
+## Related Modules
+
+- [Cluster](/api/unstable/cluster) - Distributed computing with SQL persistence
+- [AI](/api/unstable/ai) - AI applications with SQL storage
+- [CLI](/api/unstable/cli) - Command-line database tools

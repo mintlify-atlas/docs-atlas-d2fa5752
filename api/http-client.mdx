@@ -1,0 +1,681 @@
+---
+title: HttpClient
+description: Composable HTTP client with Effect
+---
+
+The `HttpClient` module provides a functional, composable HTTP client built on Effect. It features automatic retries, rate limiting, tracing, cookie management, and powerful transformation APIs.
+
+## Overview
+
+HttpClient offers:
+- Composable request/response transformations
+- Built-in retry strategies for transient errors
+- Rate limiting with automatic header inspection
+- Distributed tracing integration
+- Cookie jar management
+- Type-safe error handling
+- Request/response streaming
+
+## Basic Usage
+
+```ts
+import { Effect, HttpClient } from "effect"
+
+const program = Effect.gen(function*() {
+  // Get the client service
+  const client = yield* HttpClient.HttpClient
+  
+  // Make a GET request
+  const response = yield* client.get("https://api.example.com/users")
+  
+  // Parse JSON response
+  const users = yield* response.json
+  yield* Effect.log("Users:", users)
+})
+```
+
+## Making Requests
+
+HttpClient provides convenience methods for all HTTP verbs:
+
+### `get`
+
+```ts
+get: (
+  url: string | URL,
+  options?: HttpClientRequest.Options.NoUrl
+) => Effect.Effect<HttpClientResponse, HttpClientError, HttpClient>
+```
+
+### `post`
+
+```ts
+post: (
+  url: string | URL,
+  options?: HttpClientRequest.Options.NoUrl
+) => Effect.Effect<HttpClientResponse, HttpClientError, HttpClient>
+```
+
+### Other Methods
+
+- `put` - HTTP PUT requests
+- `patch` - HTTP PATCH requests  
+- `del` - HTTP DELETE requests
+- `head` - HTTP HEAD requests
+- `options` - HTTP OPTIONS requests
+
+**Example:**
+```ts
+import { Effect, HttpClient } from "effect"
+
+const program = Effect.gen(function*() {
+  const client = yield* HttpClient.HttpClient
+  
+  // POST with JSON body
+  const response = yield* client.post("https://api.example.com/users", {
+    headers: { "content-type": "application/json" },
+    body: HttpBody.json({ name: "Alice", email: "alice@example.com" })
+  })
+  
+  const user = yield* response.json
+  yield* Effect.log("Created user:", user)
+})
+```
+
+## Request Transformation
+
+### `mapRequest`
+
+Transforms the request before sending.
+
+```ts
+mapRequest: {
+  (
+    f: (req: HttpClientRequest) => HttpClientRequest
+  ): <E, R>(self: HttpClient.With<E, R>) => HttpClient.With<E, R>
+  <E, R>(
+    self: HttpClient.With<E, R>,
+    f: (req: HttpClientRequest) => HttpClientRequest
+  ): HttpClient.With<E, R>
+}
+```
+
+**Example:**
+```ts
+import { Effect, HttpClient, HttpClientRequest } from "effect"
+
+const program = Effect.gen(function*() {
+  const client = yield* HttpClient.HttpClient
+  
+  // Add auth header to all requests
+  const authenticatedClient = HttpClient.mapRequest(client, (req) =>
+    HttpClientRequest.setHeader(req, "authorization", "Bearer TOKEN")
+  )
+  
+  const response = yield* authenticatedClient.get("https://api.example.com/profile")
+})
+```
+
+### `mapRequestEffect`
+
+Transforms the request with an Effect.
+
+```ts
+mapRequestEffect: {
+  <E2, R2>(
+    f: (req: HttpClientRequest) => Effect.Effect<HttpClientRequest, E2, R2>
+  ): <E, R>(self: HttpClient.With<E, R>) => HttpClient.With<E | E2, R | R2>
+}
+```
+
+**Example:**
+```ts
+import { Effect, HttpClient, HttpClientRequest } from "effect"
+
+const program = Effect.gen(function*() {
+  const client = yield* HttpClient.HttpClient
+  
+  // Dynamically add timestamp header
+  const clientWithTimestamp = HttpClient.mapRequestEffect(client, (req) =>
+    Effect.map(
+      Effect.sync(() => new Date().toISOString()),
+      (timestamp) => HttpClientRequest.setHeader(req, "x-timestamp", timestamp)
+    )
+  )
+})
+```
+
+## Response Transformation
+
+### `transform`
+
+Transforms both request and response.
+
+```ts
+transform: {
+  <E, R, E1, R1>(
+    f: (
+      effect: Effect.Effect<HttpClientResponse, E, R>,
+      request: HttpClientRequest
+    ) => Effect.Effect<HttpClientResponse, E1, R1>
+  ): (self: HttpClient.With<E, R>) => HttpClient.With<E | E1, R | R1>
+}
+```
+
+**Example:**
+```ts
+import { Console, Effect, HttpClient } from "effect"
+
+const program = Effect.gen(function*() {
+  const client = yield* HttpClient.HttpClient
+  
+  // Log all requests and responses
+  const loggingClient = HttpClient.transform(client, (effect, request) =>
+    Effect.gen(function*() {
+      yield* Console.log(`Request: ${request.method} ${request.url}`)
+      const response = yield* effect
+      yield* Console.log(`Response: ${response.status}`)
+      return response
+    })
+  )
+})
+```
+
+## Error Handling
+
+### `catch`
+
+Handles errors with a recovery function.
+
+```ts
+catch: {
+  <E, E2, R2>(
+    f: (e: E) => Effect.Effect<HttpClientResponse, E2, R2>
+  ): <R>(self: HttpClient.With<E, R>) => HttpClient.With<E2, R2 | R>
+}
+```
+
+### `catchTag`
+
+Handles specific error types by tag.
+
+```ts
+catchTag: {
+  <K extends Tags<E>, E, E1, R1>(
+    tag: K,
+    f: (e: ExtractTag<E, K>) => Effect.Effect<HttpClientResponse, E1, R1>
+  ): <R>(self: HttpClient.With<E, R>) => HttpClient.With<E1 | ExcludeTag<E, K>, R1 | R>
+}
+```
+
+**Example:**
+```ts
+import { Effect, HttpClient } from "effect"
+
+const program = Effect.gen(function*() {
+  const client = yield* HttpClient.HttpClient
+  
+  const resilientClient = client.pipe(
+    HttpClient.catchTag("TransportError", (error) =>
+      Effect.gen(function*() {
+        yield* Effect.log("Network error, using cache")
+        // Return cached response
+        return yield* getCachedResponse()
+      })
+    )
+  )
+})
+```
+
+### `catchTags`
+
+Handles multiple error types.
+
+```ts
+catchTags: {
+  <E, Cases>(
+    cases: Cases
+  ): <R>(self: HttpClient.With<E, R>) => HttpClient.With<...>
+}
+```
+
+**Example:**
+```ts
+import { Effect, HttpClient } from "effect"
+
+const resilientClient = client.pipe(
+  HttpClient.catchTags({
+    TransportError: (error) => Effect.succeed(fallbackResponse),
+    InvalidUrlError: (error) => Effect.succeed(defaultResponse)
+  })
+)
+```
+
+## Filtering Responses
+
+### `filterStatus`
+
+Filters responses by status code predicate.
+
+```ts
+filterStatus: {
+  (f: (status: number) => boolean): <E, R>(
+    self: HttpClient.With<E, R>
+  ) => HttpClient.With<E | HttpClientError, R>
+}
+```
+
+**Example:**
+```ts
+import { Effect, HttpClient } from "effect"
+
+const program = Effect.gen(function*() {
+  const client = yield* HttpClient.HttpClient
+  
+  // Only accept 2xx responses
+  const strictClient = HttpClient.filterStatus(client, (status) =>
+    status >= 200 && status < 300
+  )
+})
+```
+
+### `filterStatusOk`
+
+Filters to only 2xx status codes.
+
+```ts
+filterStatusOk: <E, R>(
+  self: HttpClient.With<E, R>
+) => HttpClient.With<E | HttpClientError, R>
+```
+
+## Retry Strategies
+
+### `retry`
+
+Retries requests based on a schedule or policy.
+
+```ts
+retry: {
+  <E, O extends Effect.Retry.Options<E>>(
+    options: O
+  ): <R>(self: HttpClient.With<E, R>) => Retry.Return<R, E, O>
+  <B, E, ES, R1>(
+    policy: Schedule.Schedule<B, E, ES, R1>
+  ): <R>(self: HttpClient.With<E, R>) => HttpClient.With<E | ES, R1 | R>
+}
+```
+
+**Example:**
+```ts
+import { Effect, HttpClient, Schedule } from "effect"
+
+const program = Effect.gen(function*() {
+  const client = yield* HttpClient.HttpClient
+  
+  // Retry up to 3 times with exponential backoff
+  const resilientClient = HttpClient.retry(client, 
+    Schedule.exponential("100 millis").pipe(
+      Schedule.upTo("5 seconds"),
+      Schedule.compose(Schedule.recurs(3))
+    )
+  )
+})
+```
+
+### `retryTransient`
+
+Automatically retries transient errors (timeouts, 429, 500-504).
+
+```ts
+retryTransient: {
+  <E, B, ES, R1>(
+    options: {
+      readonly retryOn?: "errors-only" | "response-only" | "errors-and-responses"
+      readonly while?: Predicate<E | ES>
+      readonly schedule?: Schedule.Schedule<B, any, ES, R1>
+      readonly times?: number
+    }
+  ): <R>(self: HttpClient.With<E, R>) => HttpClient.With<E | ES, R1 | R>
+}
+```
+
+**Example:**
+```ts
+import { Effect, HttpClient, Schedule } from "effect"
+
+const program = Effect.gen(function*() {
+  const client = yield* HttpClient.HttpClient
+  
+  // Retry transient errors with exponential backoff
+  const resilientClient = HttpClient.retryTransient(client, {
+    schedule: Schedule.exponential("1 second"),
+    times: 5
+  })
+  
+  // Retry only on error responses (not transport errors)
+  const responseRetryClient = HttpClient.retryTransient(client, {
+    retryOn: "response-only",
+    times: 3
+  })
+})
+```
+
+Transient errors include:
+- Network timeouts
+- HTTP 408 (Request Timeout)
+- HTTP 429 (Too Many Requests)
+- HTTP 500 (Internal Server Error)
+- HTTP 502 (Bad Gateway)
+- HTTP 503 (Service Unavailable)
+- HTTP 504 (Gateway Timeout)
+
+## Rate Limiting
+
+### `withRateLimiter`
+
+Applies rate limiting using the RateLimiter service.
+
+```ts
+withRateLimiter: {
+  (options: {
+    readonly limiter: RateLimiter.RateLimiter
+    readonly window: Duration.Input
+    readonly limit: number
+    readonly key: string | ((req: HttpClientRequest) => string)
+    readonly algorithm?: "fixed-window" | "token-bucket"
+    readonly tokens?: number | ((req: HttpClientRequest) => number)
+    readonly disableResponseInspection?: boolean
+  }): <E, R>(self: HttpClient.With<E, R>) => HttpClient.With<E | RateLimiterError, R>
+}
+```
+
+**Example:**
+```ts
+import { Effect, HttpClient, RateLimiter } from "effect"
+
+const program = Effect.gen(function*() {
+  const client = yield* HttpClient.HttpClient
+  const limiter = yield* RateLimiter.RateLimiter
+  
+  // Rate limit to 10 requests per second
+  const rateLimitedClient = HttpClient.withRateLimiter(client, {
+    limiter,
+    window: "1 second",
+    limit: 10,
+    key: "api-requests"
+  })
+  
+  // Per-user rate limiting
+  const perUserClient = HttpClient.withRateLimiter(client, {
+    limiter,
+    window: "1 minute",
+    limit: 100,
+    key: (req) => req.headers.authorization ?? "anonymous"
+  })
+})
+```
+
+Rate limiting features:
+- Automatic limit updates from response headers (`RateLimit-*`, `X-RateLimit-*`)
+- Automatic retry of 429 responses
+- Support for fixed-window and token-bucket algorithms
+- Per-request token consumption
+
+## Cookie Management
+
+### `withCookiesRef`
+
+Attaches a Ref for cookie jar management.
+
+```ts
+withCookiesRef: {
+  (ref: Ref.Ref<Cookies.Cookies>): <E, R>(
+    self: HttpClient.With<E, R>
+  ) => HttpClient.With<E, R>
+}
+```
+
+**Example:**
+```ts
+import { Effect, HttpClient, Ref } from "effect"
+
+const program = Effect.gen(function*() {
+  const client = yield* HttpClient.HttpClient
+  const cookieJar = yield* Ref.make(Cookies.empty)
+  
+  // Client automatically manages cookies
+  const sessionClient = HttpClient.withCookiesRef(client, cookieJar)
+  
+  // Login and get session cookie
+  yield* sessionClient.post("https://api.example.com/login", {
+    body: HttpBody.json({ username: "user", password: "pass" })
+  })
+  
+  // Session cookie automatically included
+  const profile = yield* sessionClient.get("https://api.example.com/profile")
+})
+```
+
+## Redirects
+
+### `followRedirects`
+
+Automatically follows HTTP redirects.
+
+```ts
+followRedirects: {
+  (maxRedirects?: number): <E, R>(
+    self: HttpClient.With<E, R>
+  ) => HttpClient.With<E, R>
+}
+```
+
+**Example:**
+```ts
+import { Effect, HttpClient } from "effect"
+
+const program = Effect.gen(function*() {
+  const client = yield* HttpClient.HttpClient
+  
+  // Follow up to 10 redirects (default)
+  const redirectClient = HttpClient.followRedirects(client)
+  
+  // Custom max redirects
+  const limitedClient = HttpClient.followRedirects(client, 5)
+})
+```
+
+## Scoped Requests
+
+### `withScope`
+
+Ties the request lifetime to a Scope.
+
+```ts
+withScope: <E, R>(
+  self: HttpClient.With<E, R>
+) => HttpClient.With<E, R | Scope>
+```
+
+**Example:**
+```ts
+import { Effect, HttpClient, Scope } from "effect"
+
+const program = Effect.scoped(
+  Effect.gen(function*() {
+    const client = yield* HttpClient.HttpClient
+    const scopedClient = HttpClient.withScope(client)
+    
+    // Request is cancelled if scope is interrupted
+    const response = yield* scopedClient.get("https://api.example.com/data")
+    
+    // Process response...
+  })
+)
+```
+
+## Tracing
+
+HttpClient automatically integrates with Effect's tracing system:
+
+```ts
+import { Effect, HttpClient, Tracer } from "effect"
+
+const program = Effect.gen(function*() {
+  const client = yield* HttpClient.HttpClient
+  
+  // Requests automatically create spans with:
+  // - http.request.method
+  // - server.address
+  // - url.full
+  // - http.response.status_code
+  
+  const response = yield* client.get("https://api.example.com/users")
+})
+```
+
+### Customizing Tracing
+
+```ts
+import { Effect, HttpClient } from "effect"
+
+// Disable tracing for specific requests
+const program = Effect.locally(
+  Effect.gen(function*() {
+    const client = yield* HttpClient.HttpClient
+    const response = yield* client.get("https://api.example.com/internal")
+  }),
+  HttpClient.TracerDisabledWhen,
+  (req) => req.url.includes("internal")
+)
+
+// Custom span names
+const customSpanProgram = Effect.locally(
+  program,
+  HttpClient.SpanNameGenerator,
+  (req) => `API ${req.method} ${new URL(req.url).pathname}`
+)
+```
+
+## Side Effects
+
+### `tap`
+
+Performs a side effect on successful responses.
+
+```ts
+tap: {
+  <_, E2, R2>(
+    f: (response: HttpClientResponse) => Effect.Effect<_, E2, R2>
+  ): <E, R>(self: HttpClient.With<E, R>) => HttpClient.With<E | E2, R | R2>
+}
+```
+
+### `tapError`
+
+Performs a side effect on errors.
+
+```ts
+tapError: {
+  <_, E, E2, R2>(
+    f: (e: E) => Effect.Effect<_, E2, R2>
+  ): <R>(self: HttpClient.With<E, R>) => HttpClient.With<E | E2, R | R2>
+}
+```
+
+### `tapRequest`
+
+Performs a side effect on requests before sending.
+
+```ts
+tapRequest: {
+  <_, E2, R2>(
+    f: (req: HttpClientRequest) => Effect.Effect<_, E2, R2>
+  ): <E, R>(self: HttpClient.With<E, R>) => HttpClient.With<E | E2, R | R2>
+}
+```
+
+**Example:**
+```ts
+import { Console, Effect, HttpClient } from "effect"
+
+const program = Effect.gen(function*() {
+  const client = yield* HttpClient.HttpClient
+  
+  const loggingClient = client.pipe(
+    HttpClient.tapRequest((req) =>
+      Console.log(`Sending ${req.method} ${req.url}`)
+    ),
+    HttpClient.tap((res) =>
+      Console.log(`Received ${res.status}`)
+    ),
+    HttpClient.tapError((err) =>
+      Console.error(`Request failed:`, err)
+    )
+  )
+})
+```
+
+## Creating Custom Clients
+
+### `make`
+
+Creates a custom HttpClient implementation.
+
+```ts
+make: (
+  f: (
+    request: HttpClientRequest,
+    url: URL,
+    signal: AbortSignal,
+    fiber: Fiber
+  ) => Effect.Effect<HttpClientResponse, HttpClientError>
+) => HttpClient
+```
+
+### `makeWith`
+
+Creates a client with custom pre/post processing.
+
+```ts
+makeWith: <E2, R2, E, R>(
+  postprocess: (
+    request: Effect.Effect<HttpClientRequest, E2, R2>
+  ) => Effect.Effect<HttpClientResponse, E, R>,
+  preprocess: (req: HttpClientRequest) => Effect.Effect<HttpClientRequest, E2, R2>
+) => HttpClient.With<E, R>
+```
+
+## Type Reference
+
+### HttpClient
+
+```ts
+interface HttpClient extends HttpClient.With<HttpClientError> {}
+
+interface HttpClient.With<E, R = never> {
+  readonly execute: (
+    request: HttpClientRequest
+  ) => Effect.Effect<HttpClientResponse, E, R>
+  
+  readonly get: (
+    url: string | URL,
+    options?: HttpClientRequest.Options.NoUrl
+  ) => Effect.Effect<HttpClientResponse, E, R>
+  
+  readonly post: (
+    url: string | URL,
+    options?: HttpClientRequest.Options.NoUrl
+  ) => Effect.Effect<HttpClientResponse, E, R>
+  
+  // ... other HTTP methods
+}
+```
+
+## See Also
+
+- [HttpClientRequest](/api/http-client-request) - Request construction and manipulation
+- [HttpClientResponse](/api/http-client-response) - Response handling
+- [Schedule](/api/schedule) - Retry schedules
+- [Effect](/api/effect) - Core Effect operations

@@ -1,0 +1,243 @@
+---
+title: "@effect/sql-mysql2"
+description: "MySQL driver for Effect SQL"
+---
+
+## Overview
+
+`@effect/sql-mysql2` provides a MySQL driver for Effect's SQL toolkit. It uses the `mysql2` library and supports connection pooling, transactions, and prepared statements.
+
+## Installation
+
+<CodeGroup>
+
+```bash npm
+npm install @effect/sql-mysql2
+```
+
+```bash pnpm
+pnpm add @effect/sql-mysql2
+```
+
+```bash yarn
+yarn add @effect/sql-mysql2
+```
+
+</CodeGroup>
+
+## Basic Usage
+
+### Creating a Client
+
+Use the `MysqlClient.layer` function to create a MySQL client layer:
+
+```typescript
+import { MysqlClient } from "@effect/sql-mysql2"
+import { Effect, Layer, Redacted } from "effect"
+
+const SqlLive = MysqlClient.layer({
+  host: "localhost",
+  port: 3306,
+  database: "mydb",
+  username: "root",
+  password: Redacted.make("password")
+})
+```
+
+### Connection with URL
+
+You can also connect using a connection URL:
+
+```typescript
+import { Redacted } from "effect"
+
+const SqlLive = MysqlClient.layer({
+  url: Redacted.make("mysql://root:password@localhost:3306/mydb")
+})
+```
+
+### Executing Queries
+
+```typescript
+import { Effect } from "effect"
+import { SqlClient } from "effect/unstable/sql"
+
+const program = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient
+
+  // Simple query
+  const users = yield* sql<{ id: number; name: string }>`
+    SELECT id, name FROM users WHERE active = ${true}
+  `
+
+  // Insert with helper
+  yield* sql`
+    INSERT INTO users ${sql.insert({ name: "Alice", email: "alice@example.com" })}
+  `
+
+  // Update with helper
+  yield* sql`
+    UPDATE users SET ${sql.update({ name: "Bob" })} WHERE id = ${1}
+  `
+})
+
+const runnable = program.pipe(Effect.provide(SqlLive))
+```
+
+## Configuration Options
+
+### Connection Options
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `url` | `Redacted` | MySQL connection URL (overrides other connection options) |
+| `host` | `string` | Database host |
+| `port` | `number` | Database port (default: 3306) |
+| `database` | `string` | Database name |
+| `username` | `string` | Username for authentication |
+| `password` | `Redacted` | Password for authentication |
+
+### Connection Pool Options
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `maxConnections` | `number` | Maximum number of connections in the pool |
+| `connectionTTL` | `Duration.Input` | Time-to-live for idle connections |
+| `poolConfig` | `Mysql.PoolOptions` | Additional mysql2 pool configuration |
+
+### Transform Options
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `transformResultNames` | `(str: string) => string` | Transform column names in results |
+| `transformQueryNames` | `(str: string) => string` | Transform identifiers in queries |
+
+### Advanced Options
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `spanAttributes` | `Record<string, unknown>` | Custom telemetry attributes |
+
+## Transactions
+
+Automatic transaction management:
+
+```typescript
+const sql = yield* SqlClient.SqlClient
+
+const result = yield* sql.withTransaction(
+  Effect.gen(function* () {
+    yield* sql`INSERT INTO accounts (balance) VALUES (${100})`
+    yield* sql`UPDATE accounts SET balance = balance - ${50} WHERE id = ${1}`
+    return yield* sql<{ balance: number }>`SELECT balance FROM accounts WHERE id = ${1}`
+  })
+)
+```
+
+Transactions automatically roll back on errors and commit on success.
+
+## Name Transformations
+
+Automatically convert between naming conventions:
+
+```typescript
+import { String } from "effect"
+
+const SqlLive = MysqlClient.layer({
+  host: "localhost",
+  database: "mydb",
+  // Transform camelCase to snake_case for queries
+  transformQueryNames: String.camelToSnake,
+  // Transform snake_case to camelCase for results
+  transformResultNames: String.snakeToCamel
+})
+
+// Use camelCase in your code
+const users = yield* sql<{ userId: number; firstName: string }>`
+  SELECT userId, firstName FROM users
+`
+// Queries become: SELECT user_id, first_name FROM users
+```
+
+## Error Handling
+
+All SQL errors are wrapped in `SqlError`:
+
+```typescript
+import { SqlError } from "effect/unstable/sql"
+
+const program = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient
+  return yield* sql`SELECT * FROM users`
+}).pipe(
+  Effect.catchTag("SqlError", (error) =>
+    Effect.log(`Database error: ${error.message}`)
+  )
+)
+```
+
+## Streaming Results
+
+Stream large result sets efficiently:
+
+```typescript
+import { Stream } from "effect"
+
+const program = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient
+
+  const users = sql.stream<{ id: number; name: string }>`
+    SELECT id, name FROM users
+  `
+
+  yield* Stream.runForEach(users, (user) =>
+    Effect.log(`Processing user: ${user.name}`)
+  )
+})
+```
+
+## Multiple Statements
+
+The driver automatically enables support for multiple statements:
+
+```typescript
+const sql = yield* SqlClient.SqlClient
+
+yield* sql`
+  INSERT INTO logs (message) VALUES (${'Starting'});
+  INSERT INTO logs (message) VALUES (${'Processing'});
+  INSERT INTO logs (message) VALUES (${'Complete'});
+`
+```
+
+## Type Safety
+
+The client is fully typed with Effect's type system:
+
+```typescript
+interface User {
+  id: number
+  name: string
+  email: string
+}
+
+const users = yield* sql<User>`SELECT * FROM users`
+// users: ReadonlyArray<User>
+```
+
+## Advanced Pool Configuration
+
+For advanced use cases, you can pass additional mysql2 pool options:
+
+```typescript
+const SqlLive = MysqlClient.layer({
+  host: "localhost",
+  database: "mydb",
+  poolConfig: {
+    waitForConnections: true,
+    queueLimit: 0,
+    enableKeepAlive: true,
+    keepAliveInitialDelay: 0
+  }
+})
+```

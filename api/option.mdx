@@ -1,0 +1,332 @@
+---
+title: Option
+---
+
+The `Option` module provides a type-safe way to represent values that may or may not exist. An `Option<A>` is either `Some<A>` (containing a value) or `None` (representing absence).
+
+## Mental Model
+
+- **`Option<A>`** is a discriminated union: `None | Some<A>`
+- **`None`** represents the absence of a value (like `null`/`undefined`, but type-safe)
+- **`Some<A>`** wraps a present value of type `A`, accessed via `.value`
+- **Monad**: chain operations with `flatMap`, compose pipelines with `pipe`
+- **Immutable**: all operations return new `Option` values; the input is never mutated
+- **Yieldable**: in `Effect.gen`, producing the inner value or short-circuiting with `NoSuchElementError`
+
+## Key Operations
+
+### Create
+
+Build Options from values:
+
+```ts
+import { Option } from "effect"
+
+// From a value
+const some = Option.some(42)
+// { _tag: "Some", value: 42 }
+
+// Absent value
+const none = Option.none()
+// { _tag: "None" }
+
+// From nullable
+const fromNull = Option.fromNullishOr(null) // None
+const fromValue = Option.fromNullishOr(42) // Some(42)
+
+// From iterable (first element)
+const fromArray = Option.fromIterable([1, 2, 3]) // Some(1)
+const fromEmpty = Option.fromIterable([]) // None
+
+// From throwing function
+const parse = Option.liftThrowable(JSON.parse)
+const ok = parse('{"x": 1}') // Some({ x: 1 })
+const err = parse("invalid") // None
+```
+
+### Check
+
+Test and narrow:
+
+```ts
+import { Option } from "effect"
+
+const value: Option<number> = Option.some(42)
+
+// Type guards
+if (Option.isSome(value)) {
+  console.log(value.value) // 42 (type narrowed to Some<number>)
+}
+
+if (Option.isNone(value)) {
+  // Type narrowed to None<number>
+}
+
+// Generic check
+const isOption = Option.isOption(value) // true
+```
+
+### Transform
+
+Map and chain:
+
+```ts
+import { Option } from "effect"
+
+const value = Option.some(5)
+
+// Map (transform the value)
+const doubled = Option.map(value, (n) => n * 2)
+// Some(10)
+
+// FlatMap (chain operations)
+const result = Option.flatMap(value, (n) =>
+  n > 0 ? Option.some(n * 2) : Option.none()
+)
+// Some(10)
+
+// Replace value
+const replaced = Option.as(value, "hello")
+// Some("hello")
+```
+
+### Unwrap
+
+Extract the value:
+
+```ts
+import { Option } from "effect"
+
+const some = Option.some(42)
+const none = Option.none<number>()
+
+// With fallback
+const value1 = Option.getOrElse(some, () => 0) // 42
+const value2 = Option.getOrElse(none, () => 0) // 0
+
+// To null/undefined
+const asNull = Option.getOrNull(none) // null
+const asUndef = Option.getOrUndefined(none) // undefined
+
+// Throw on None
+try {
+  const value = Option.getOrThrow(none) // throws Error
+} catch (e) {
+  console.log(e.message) // "getOrThrow called on a None"
+}
+
+// Custom error
+try {
+  const value = Option.getOrThrowWith(none, () => new Error("Missing"))
+} catch (e) {
+  console.log(e.message) // "Missing"
+}
+```
+
+### Match
+
+Pattern match:
+
+```ts
+import { Option } from "effect"
+
+const value: Option<number> = Option.some(42)
+
+const message = Option.match(value, {
+  onNone: () => "No value",
+  onSome: (n) => `Value is ${n}`
+})
+// "Value is 42"
+```
+
+### Filter
+
+Refine values:
+
+```ts
+import { Option } from "effect"
+
+const value = Option.some(5)
+
+// Filter with predicate
+const positive = Option.filter(value, (n) => n > 0)
+// Some(5)
+
+const negative = Option.filter(value, (n) => n < 0)
+// None
+
+// Filter and map
+const evenDoubled = Option.filterMap(value, (n) =>
+  n % 2 === 0 ? Option.some(n * 2) : Option.none()
+)
+// None (5 is odd)
+```
+
+### Combine
+
+Join multiple Options:
+
+```ts
+import { Option } from "effect"
+
+const name = Option.some("Alice")
+const age = Option.some(30)
+
+// Zip into tuple
+const pair = Option.zipWith(name, age, (n, a) => ({ name: n, age: a }))
+// Some({ name: "Alice", age: 30 })
+
+// Combine all (tuple)
+const tuple = Option.all([name, age])
+// Some(["Alice", 30])
+
+// Combine all (struct)
+const struct = Option.all({ name, age })
+// Some({ name: "Alice", age: 30 })
+
+// Any None makes result None
+const withNone = Option.all([name, Option.none()])
+// None
+```
+
+### Fallback
+
+Provide alternatives:
+
+```ts
+import { Option } from "effect"
+
+const primary = Option.none<string>()
+const fallback = Option.some("default")
+
+// Return fallback if None
+const result1 = Option.orElse(primary, () => fallback)
+// Some("default")
+
+// Wrap fallback value
+const result2 = Option.orElseSome(primary, () => "default")
+// Some("default")
+
+// First Some from iterable
+const first = Option.firstSomeOf([
+  Option.none(),
+  Option.some(1),
+  Option.some(2)
+])
+// Some(1)
+```
+
+### Convert
+
+To/from other types:
+
+```ts
+import { Option, Result } from "effect"
+
+// From Result
+const okResult = Result.succeed(42)
+const success = Option.getSuccess(okResult) // Some(42)
+
+const errResult = Result.fail("error")
+const failure = Option.getFailure(errResult) // Some("error")
+
+// To array
+const someArray = Option.toArray(Option.some(1)) // [1]
+const noneArray = Option.toArray(Option.none()) // []
+```
+
+### Generator
+
+Compose with generator syntax:
+
+```ts
+import { Option } from "effect"
+
+const result = Option.gen(function* () {
+  const a = yield* Option.some(2)
+  const b = yield* Option.some(3)
+  const c = yield* Option.none() // Short-circuits here
+  return a + b + c // Never reached
+})
+// None
+
+const success = Option.gen(function* () {
+  const a = yield* Option.some(2)
+  const b = yield* Option.some(3)
+  return a + b
+})
+// Some(5)
+```
+
+### Do Notation
+
+Build objects step-by-step:
+
+```ts
+import { Option, pipe } from "effect"
+
+const result = pipe(
+  Option.Do,
+  Option.bind("x", () => Option.some(2)),
+  Option.bind("y", () => Option.some(3)),
+  Option.let("sum", ({ x, y }) => x + y)
+)
+// Some({ x: 2, y: 3, sum: 5 })
+```
+
+## Type Signatures
+
+```ts
+// Core types
+type Option<A> = None<A> | Some<A>
+
+interface None<A> {
+  readonly _tag: "None"
+}
+
+interface Some<A> {
+  readonly _tag: "Some"
+  readonly value: A
+}
+
+// Creation
+const some: <A>(value: A) => Option<A>
+const none: <A = never>() => Option<A>
+const fromNullishOr: <A>(a: A) => Option<NonNullable<A>>
+
+// Guards
+const isOption: (input: unknown) => input is Option<unknown>
+const isNone: <A>(self: Option<A>) => self is None<A>
+const isSome: <A>(self: Option<A>) => self is Some<A>
+
+// Transform
+const map: {
+  <A, B>(f: (a: A) => B): (self: Option<A>) => Option<B>
+  <A, B>(self: Option<A>, f: (a: A) => B): Option<B>
+}
+const flatMap: {
+  <A, B>(f: (a: A) => Option<B>): (self: Option<A>) => Option<B>
+  <A, B>(self: Option<A>, f: (a: A) => Option<B>): Option<B>
+}
+
+// Unwrap
+const getOrElse: {
+  <B>(onNone: () => B): <A>(self: Option<A>) => B | A
+  <A, B>(self: Option<A>, onNone: () => B): A | B
+}
+const getOrThrow: <A>(self: Option<A>) => A
+
+// Match
+const match: {
+  <B, A, C = B>(options: {
+    readonly onNone: () => B
+    readonly onSome: (a: A) => C
+  }): (self: Option<A>) => B | C
+}
+```
+
+## See Also
+
+- [Result](/api/result) — For operations that can fail with an error
+- [Effect](/api/effect) — For async/effectful computations
+- [Array](/api/array) — Working with collections of Options

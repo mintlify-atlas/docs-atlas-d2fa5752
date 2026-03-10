@@ -1,0 +1,509 @@
+---
+title: Concurrency
+description: Master concurrent operations with fibers, structured concurrency, and parallel execution patterns in Effect
+---
+
+Effect provides structured concurrency through fibers—lightweight threads managed by the Effect runtime. This guide covers how to fork fibers, combine operations in parallel, and manage concurrent workflows safely.
+
+## Understanding Fibers
+
+Fibers are Effect's unit of concurrency. Unlike OS threads, fibers are cheap to create (thousands can run simultaneously) and are automatically interrupted when their parent scope closes.
+
+### Key Properties
+
+- **Lightweight**: Fibers have minimal overhead and fast context switching
+- **Structured**: Child fibers are automatically tracked and cleaned up
+- **Interruptible**: Fibers respect interruption signals for graceful shutdown
+- **Scoped**: Fibers are bound to a scope and cleaned up when it closes
+
+## Forking Fibers
+
+Create new fibers with the fork operations.
+
+### Effect.forkScoped
+
+Fork a fiber that's bound to the current scope:
+
+```typescript
+import { Effect } from "effect"
+
+const Worker = Effect.gen(function*() {
+  yield* Effect.logInfo("Starting worker...")
+  
+  // Fork a background fiber that runs until the scope closes
+  yield* Effect.forkScoped(Effect.gen(function*() {
+    while (true) {
+      yield* Effect.logInfo("Working...")
+      yield* Effect.sleep("1 second")
+    }
+  }))
+  
+  yield* Effect.logInfo("Worker setup complete")
+})
+
+// The forked fiber is automatically interrupted when the scope closes
+```
+
+### Effect.fork
+
+Fork a fiber and get a handle to control it:
+
+```typescript
+import { Effect, Fiber } from "effect"
+
+const program = Effect.gen(function*() {
+  // Fork a fiber and get a handle
+  const fiber = yield* Effect.fork(
+    Effect.gen(function*() {
+      yield* Effect.sleep("2 seconds")
+      return "completed"
+    })
+  )
+  
+  yield* Effect.logInfo("Fiber started, doing other work...")
+  yield* Effect.sleep("1 second")
+  
+  // Wait for the fiber to complete
+  const result = yield* Fiber.join(fiber)
+  yield* Effect.logInfo("Result:", result)
+})
+```
+
+### Effect.forkDaemon
+
+Fork a daemon fiber that runs independently of any scope:
+
+```typescript
+import { Effect } from "effect"
+
+const backgroundTask = Effect.gen(function*() {
+  // Daemon fiber runs until explicitly interrupted or the runtime shuts down
+  yield* Effect.forkDaemon(
+    Effect.gen(function*() {
+      while (true) {
+        yield* Effect.logInfo("Background task running...")
+        yield* Effect.sleep("5 seconds")
+      }
+    })
+  )
+})
+```
+
+<Warning>
+Use `forkDaemon` sparingly. Daemon fibers bypass scope-based cleanup and can leak if not carefully managed.
+</Warning>
+
+## Parallel Execution
+
+Effect provides powerful combinators for running operations concurrently.
+
+### Effect.all
+
+Run multiple effects in parallel and collect results:
+
+```typescript
+import { Effect } from "effect"
+
+const program = Effect.gen(function*() {
+  // Run three effects concurrently and collect results as an array
+  const [user, posts, comments] = yield* Effect.all([
+    fetchUser(1),
+    fetchPosts(1),
+    fetchComments(1)
+  ], { concurrency: "unbounded" })
+  
+  return { user, posts, comments }
+})
+
+// Or use an object for named results
+const programNamed = Effect.gen(function*() {
+  const result = yield* Effect.all({
+    user: fetchUser(1),
+    posts: fetchPosts(1),
+    comments: fetchComments(1)
+  }, { concurrency: "unbounded" })
+  
+  // result has type { user: User, posts: Post[], comments: Comment[] }
+  return result
+})
+```
+
+### Concurrency Control
+
+Control how many operations run simultaneously:
+
+```typescript
+import { Effect } from "effect"
+
+const userIds = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+
+// Run at most 3 fetches concurrently
+const users = yield* Effect.all(
+  userIds.map(id => fetchUser(id)),
+  { concurrency: 3 }
+)
+
+// Run all at once (unlimited concurrency)
+const usersUnbounded = yield* Effect.all(
+  userIds.map(id => fetchUser(id)),
+  { concurrency: "unbounded" }
+)
+
+// Run sequentially (concurrency: 1)
+const usersSequential = yield* Effect.all(
+  userIds.map(id => fetchUser(id)),
+  { concurrency: 1 }
+)
+```
+
+### Effect.forEach
+
+Map over a collection with concurrent execution:
+
+```typescript
+import { Effect } from "effect"
+
+const enrichedOrders = yield* Effect.forEach(
+  orders,
+  (order) => enrichOrder(order),
+  { concurrency: 4 }
+)
+```
+
+### Effect.race
+
+Run effects concurrently and return the first to complete:
+
+```typescript
+import { Effect } from "effect"
+
+const program = Effect.gen(function*() {
+  // Race two API calls, use whichever completes first
+  const result = yield* Effect.race([
+    fetchFromPrimaryAPI(),
+    fetchFromBackupAPI()
+  ])
+  
+  return result
+})
+```
+
+### Effect.zip
+
+Combine two effects concurrently:
+
+```typescript
+import { Effect } from "effect"
+
+const program = Effect.gen(function*() {
+  // Run both effects concurrently
+  const [user, settings] = yield* Effect.zip(
+    fetchUser(1),
+    fetchSettings(1)
+  )
+  
+  return { user, settings }
+})
+
+// Or use zipWith to transform the results
+const combined = Effect.zipWith(
+  fetchUser(1),
+  fetchSettings(1),
+  (user, settings) => ({ ...user, settings })
+)
+```
+
+## Structured Concurrency Patterns
+
+### Background Tasks with Scopes
+
+Create long-running background tasks that are automatically cleaned up:
+
+```typescript
+import { Effect, Layer } from "effect"
+
+const BackgroundTask = Layer.effectDiscard(Effect.gen(function*() {
+  yield* Effect.logInfo("Starting background task...")
+  
+  yield* Effect.gen(function*() {
+    while (true) {
+      yield* Effect.sleep("5 seconds")
+      yield* Effect.logInfo("Background task running...")
+    }
+  }).pipe(
+    Effect.onInterrupt(() => Effect.logInfo("Background task interrupted")),
+    Effect.forkScoped
+  )
+}))
+
+// The background task runs until the layer scope closes
+```
+
+### Racing with Timeout
+
+Race an effect against a timeout:
+
+```typescript
+import { Effect } from "effect"
+
+const program = Effect.gen(function*() {
+  const result = yield* Effect.race([
+    longRunningOperation(),
+    Effect.sleep("5 seconds").pipe(Effect.as("timeout"))
+  ])
+  
+  if (result === "timeout") {
+    yield* Effect.logWarning("Operation timed out")
+  }
+})
+
+// Or use Effect.timeout
+const withTimeout = longRunningOperation().pipe(
+  Effect.timeout("5 seconds")
+)
+```
+
+### Parallel Error Handling
+
+When running effects in parallel, the first error causes all other fibers to be interrupted:
+
+```typescript
+import { Effect } from "effect"
+
+const program = Effect.gen(function*() {
+  try {
+    const results = yield* Effect.all([
+      task1, // succeeds
+      task2, // fails immediately
+      task3  // interrupted when task2 fails
+    ], { concurrency: "unbounded" })
+  } catch (error) {
+    // Only task2's error is caught
+    // task3 was interrupted and cleaned up
+  }
+})
+```
+
+## Fiber Management
+
+### Joining Fibers
+
+Wait for a fiber to complete:
+
+```typescript
+import { Effect, Fiber } from "effect"
+
+const program = Effect.gen(function*() {
+  const fiber = yield* Effect.fork(someOperation)
+  
+  // Do other work...
+  yield* otherWork
+  
+  // Wait for the fiber to complete
+  const result = yield* Fiber.join(fiber)
+})
+```
+
+### Interrupting Fibers
+
+Manually interrupt a fiber:
+
+```typescript
+import { Effect, Fiber } from "effect"
+
+const program = Effect.gen(function*() {
+  const fiber = yield* Effect.fork(longRunningTask)
+  
+  // Do some work
+  yield* Effect.sleep("1 second")
+  
+  // Changed our mind, interrupt the fiber
+  yield* Fiber.interrupt(fiber)
+})
+```
+
+### Awaiting Fibers
+
+Wait for a fiber without joining its result:
+
+```typescript
+import { Effect, Fiber } from "effect"
+
+const program = Effect.gen(function*() {
+  const fiber = yield* Effect.fork(backgroundTask)
+  
+  // Wait for completion but ignore the result
+  yield* Fiber.await(fiber)
+  
+  yield* Effect.logInfo("Fiber completed")
+})
+```
+
+## Advanced Patterns
+
+### Fiber-local State
+
+Store state that's specific to a fiber:
+
+```typescript
+import { Effect, FiberRef } from "effect"
+
+const requestId = FiberRef.unsafeMake("default-request-id")
+
+const program = Effect.gen(function*() {
+  // Set value for current fiber
+  yield* FiberRef.set(requestId, "req-123")
+  
+  // Read value
+  const id = yield* FiberRef.get(requestId)
+  
+  yield* Effect.logInfo("Request ID:", id)
+})
+```
+
+### Racing Multiple Effects
+
+Race many effects and get the first success:
+
+```typescript
+import { Effect } from "effect"
+
+const program = Effect.gen(function*() {
+  const result = yield* Effect.raceAll([
+    fetchFromAPI1(),
+    fetchFromAPI2(),
+    fetchFromAPI3()
+  ])
+  
+  // Returns the first successful result
+  // All other fibers are interrupted
+})
+```
+
+### Parallel Validation
+
+Validate multiple things concurrently:
+
+```typescript
+import { Effect } from "effect"
+
+const validateUser = Effect.gen(function*() {
+  // Run all validations in parallel
+  yield* Effect.all([
+    validateEmail(user.email),
+    validatePassword(user.password),
+    validateUsername(user.username)
+  ], { concurrency: "unbounded" })
+  
+  return user
+})
+```
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Prefer forkScoped" icon="circle-1">
+    Use `Effect.forkScoped` over `Effect.fork` when possible. Scoped fibers are automatically cleaned up, preventing leaks.
+  </Card>
+  
+  <Card title="Control Concurrency" icon="circle-2">
+    Always specify reasonable concurrency limits with `Effect.all` and `Effect.forEach` to prevent resource exhaustion.
+  </Card>
+  
+  <Card title="Handle Interruptions" icon="circle-3">
+    Use `Effect.onInterrupt` to register cleanup handlers for background tasks and long-running operations.
+  </Card>
+  
+  <Card title="Avoid Daemon Fibers" icon="circle-4">
+    Only use `Effect.forkDaemon` when you truly need a fiber that outlives its parent scope. Prefer scoped fibers.
+  </Card>
+</CardGroup>
+
+## Concurrency Patterns Comparison
+
+<Tabs>
+  <Tab title="All (Parallel)">
+    ```typescript
+    // Run all effects, collect all results
+    const results = yield* Effect.all([
+      effect1,
+      effect2,
+      effect3
+    ], { concurrency: "unbounded" })
+    ```
+    
+    **Use when**: You need all results and all effects must succeed.
+  </Tab>
+  
+  <Tab title="Race">
+    ```typescript
+    // Run all, return first to complete
+    const result = yield* Effect.race([
+      effect1,
+      effect2,
+      effect3
+    ])
+    ```
+    
+    **Use when**: You only need one result (fastest wins).
+  </Tab>
+  
+  <Tab title="forEach">
+    ```typescript
+    // Map and collect with concurrency control
+    const results = yield* Effect.forEach(
+      items,
+      (item) => process(item),
+      { concurrency: 5 }
+    )
+    ```
+    
+    **Use when**: Processing a collection with bounded parallelism.
+  </Tab>
+  
+  <Tab title="Fork & Join">
+    ```typescript
+    // Manual fiber management
+    const fiber = yield* Effect.fork(operation)
+    // ... do other work ...
+    const result = yield* Fiber.join(fiber)
+    ```
+    
+    **Use when**: You need fine-grained control over fiber lifecycle.
+  </Tab>
+</Tabs>
+
+## Testing Concurrent Code
+
+Use `TestClock` to test time-dependent concurrent code:
+
+```typescript
+import { assert, it } from "@effect/vitest"
+import { Effect, Fiber } from "effect"
+import { TestClock } from "effect/testing"
+
+it.effect("tests concurrent timeout", () =>
+  Effect.gen(function*() {
+    const fiber = yield* Effect.forkChild(
+      Effect.sleep(60_000).pipe(Effect.as("done"))
+    )
+    
+    // Advance virtual time
+    yield* TestClock.adjust(60_000)
+    
+    const result = yield* Fiber.join(fiber)
+    assert.strictEqual(result, "done")
+  }))
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Streaming" icon="water" href="/guides/streaming">
+    Learn about concurrent stream processing
+  </Card>
+  
+  <Card title="Resource Management" icon="box" href="/guides/resource-management">
+    Manage resources safely in concurrent contexts
+  </Card>
+</CardGroup>

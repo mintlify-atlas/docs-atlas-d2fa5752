@@ -1,0 +1,371 @@
+---
+title: "CLI"
+description: "Unstable CLI module for building command-line applications with Effect"
+---
+
+<Warning>
+  The CLI module is marked as **unstable**, meaning its APIs may change in minor version releases. Use caution when upgrading Effect versions.
+</Warning>
+
+## Overview
+
+The `effect/unstable/cli` module provides powerful tools for building type-safe command-line applications with Effect. It offers composable primitives for defining commands, flags, arguments, and prompts with built-in parsing, validation, and help generation.
+
+## Installation
+
+```bash
+npm install effect
+```
+
+## Key Modules
+
+### Command
+
+The core building block for CLI applications. Commands define the structure, configuration, and behavior of CLI operations.
+
+```typescript
+import { Console } from "effect"
+import { Command, Flag, Argument } from "effect/unstable/cli"
+
+// Simple command
+const version = Command.make("version")
+
+// Command with flags and arguments
+const deploy = Command.make("deploy", {
+  env: Flag.string("env"),
+  force: Flag.boolean("force"),
+  files: Argument.string("files").pipe(Argument.variadic())
+})
+
+// Command with handler
+const greet = Command.make(
+  "greet",
+  {
+    name: Flag.string("name")
+  },
+  (config) => Console.log(`Hello, ${config.name}!`)
+)
+```
+
+**Key Functions:**
+- `Command.make(name, config?, handler?)` - Create a new command
+- `Command.withSubcommands(parent, subcommands)` - Add subcommands for hierarchical CLIs
+- `Command.run(command, args)` - Execute a command with arguments
+- `Command.provide(command, layer)` - Provide services to command handler
+
+### Flag
+
+Define command-line flags (options) with various types and behaviors.
+
+```typescript
+import { Flag } from "effect/unstable/cli"
+
+// Boolean flag: --verbose or -v
+const verbose = Flag.boolean("verbose").pipe(
+  Flag.withAlias("v")
+)
+
+// String flag with default: --config=path/to/file
+const config = Flag.string("config").pipe(
+  Flag.withDefault("./config.json")
+)
+
+// Number flag: --port=3000
+const port = Flag.number("port")
+
+// Optional flag
+const optional = Flag.string("optional").pipe(
+  Flag.optional
+)
+
+// Flag with validation
+const validated = Flag.number("threads").pipe(
+  Flag.withDefault(4),
+  Flag.mapEffect((n) => 
+    n > 0 && n <= 16
+      ? Effect.succeed(n)
+      : Effect.fail("Threads must be between 1 and 16")
+  )
+)
+```
+
+**Flag Types:**
+- `Flag.boolean(name)` - Boolean flag
+- `Flag.string(name)` - String flag
+- `Flag.number(name)` - Numeric flag
+- `Flag.integer(name)` - Integer flag
+- `Flag.date(name)` - Date flag
+- `Flag.choice(name, choices)` - Enum flag
+
+**Flag Modifiers:**
+- `Flag.withAlias(alias)` - Add short alias (e.g., -v for --verbose)
+- `Flag.withDefault(value)` - Provide default value
+- `Flag.optional` - Make flag optional
+- `Flag.repeated` - Allow multiple occurrences
+- `Flag.withDescription(desc)` - Add help description
+
+### Argument
+
+Define positional command-line arguments.
+
+```typescript
+import { Argument } from "effect/unstable/cli"
+
+// Single string argument
+const filename = Argument.string("filename")
+
+// Multiple arguments (variadic)
+const files = Argument.string("files").pipe(
+  Argument.variadic()
+)
+
+// Optional argument
+const output = Argument.string("output").pipe(
+  Argument.optional
+)
+
+// Argument with validation
+const port = Argument.integer("port").pipe(
+  Argument.mapEffect((p) =>
+    p >= 1024 && p <= 65535
+      ? Effect.succeed(p)
+      : Effect.fail("Port must be between 1024 and 65535")
+  )
+)
+```
+
+**Argument Types:**
+- `Argument.string(name)` - String argument
+- `Argument.number(name)` - Numeric argument
+- `Argument.integer(name)` - Integer argument
+- `Argument.boolean(name)` - Boolean argument
+- `Argument.date(name)` - Date argument
+
+**Argument Modifiers:**
+- `Argument.variadic()` - Accept multiple values
+- `Argument.optional` - Make argument optional
+- `Argument.withDefault(value)` - Provide default value
+- `Argument.withDescription(desc)` - Add help description
+
+### GlobalFlag
+
+Define flags that apply to all commands in a CLI application.
+
+```typescript
+import { Command, GlobalFlag } from "effect/unstable/cli"
+
+// Global verbose flag available to all commands
+const verbose = GlobalFlag.boolean("verbose").pipe(
+  GlobalFlag.withAlias("v"),
+  GlobalFlag.withDescription("Enable verbose output")
+)
+
+const cli = Command.make("mycli")
+  .pipe(Command.withGlobalFlags({ verbose }))
+```
+
+### Prompt
+
+Interactive user prompts for CLI applications.
+
+```typescript
+import { Effect } from "effect"
+import { Prompt } from "effect/unstable/cli"
+
+// Text input prompt
+const getName = Effect.gen(function*() {
+  const name = yield* Prompt.text({
+    message: "What is your name?",
+    default: "User"
+  })
+  return name
+})
+
+// Password prompt (hidden input)
+const getPassword = Prompt.password({
+  message: "Enter password:",
+  validate: (pwd) => pwd.length >= 8 || "Password must be at least 8 characters"
+})
+
+// Confirmation prompt
+const confirm = Prompt.confirm({
+  message: "Are you sure?",
+  default: false
+})
+
+// Select from list
+const selectOption = Prompt.select({
+  message: "Choose an option:",
+  choices: [
+    { title: "Option 1", value: "opt1" },
+    { title: "Option 2", value: "opt2" },
+    { title: "Option 3", value: "opt3" }
+  ]
+})
+
+// Multi-select
+const multiSelect = Prompt.multiSelect({
+  message: "Select features:",
+  choices: [
+    { title: "Feature A", value: "a" },
+    { title: "Feature B", value: "b" },
+    { title: "Feature C", value: "c" }
+  ]
+})
+```
+
+### HelpDoc
+
+Automatically generate help documentation for commands.
+
+```typescript
+import { Command, HelpDoc } from "effect/unstable/cli"
+
+// Help is automatically generated from command structure
+const command = Command.make(
+  "deploy",
+  {
+    env: Flag.string("env").pipe(
+      Flag.withDescription("Deployment environment")
+    ),
+    force: Flag.boolean("force").pipe(
+      Flag.withDescription("Force deployment")
+    )
+  }
+).pipe(
+  Command.withDescription("Deploy the application")
+)
+
+// Users can run: mycli deploy --help
+// to see generated documentation
+```
+
+### CliError
+
+Type-safe error handling for CLI operations.
+
+```typescript
+import { Effect } from "effect"
+import { CliError } from "effect/unstable/cli"
+
+// Handle CLI parsing errors
+const handleError = (error: CliError.CliError) => {
+  switch (error._tag) {
+    case "ValidationError":
+      return Effect.logError(`Validation failed: ${error.message}`)
+    case "MissingValue":
+      return Effect.logError(`Missing required value: ${error.name}`)
+    case "InvalidArgument":
+      return Effect.logError(`Invalid argument: ${error.message}`)
+    default:
+      return Effect.logError(`CLI error: ${error.message}`)
+  }
+}
+```
+
+## Complete Example
+
+Here's a complete CLI application with subcommands:
+
+```typescript
+import { Console, Effect } from "effect"
+import { Command, Flag, Argument } from "effect/unstable/cli"
+
+// Define subcommands
+const init = Command.make(
+  "init",
+  {
+    name: Argument.string("name"),
+    typescript: Flag.boolean("typescript").pipe(
+      Flag.withAlias("ts"),
+      Flag.withDefault(false)
+    )
+  },
+  ({ name, typescript }) =>
+    Console.log(`Initializing project "${name}" with TypeScript: ${typescript}`)
+).pipe(
+  Command.withDescription("Initialize a new project")
+)
+
+const build = Command.make(
+  "build",
+  {
+    watch: Flag.boolean("watch").pipe(
+      Flag.withAlias("w"),
+      Flag.withDefault(false)
+    ),
+    outDir: Flag.string("outDir").pipe(
+      Flag.withDefault("./dist")
+    )
+  },
+  ({ watch, outDir }) =>
+    Console.log(`Building to ${outDir}${watch ? " (watch mode)" : ""}`)
+).pipe(
+  Command.withDescription("Build the project")
+)
+
+const test = Command.make(
+  "test",
+  {
+    coverage: Flag.boolean("coverage").pipe(
+      Flag.withDefault(false)
+    ),
+    files: Argument.string("files").pipe(
+      Argument.variadic(),
+      Argument.optional
+    )
+  },
+  ({ coverage, files }) =>
+    Console.log(`Running tests${coverage ? " with coverage" : ""}${files ? ` for: ${files.join(", ")}` : ""}`)
+).pipe(
+  Command.withDescription("Run tests")
+)
+
+// Create main CLI with subcommands
+const cli = Command.make("mycli").pipe(
+  Command.withSubcommands([init, build, test]),
+  Command.withDescription("My CLI application")
+)
+
+// Run the CLI
+const program = Command.run(cli, process.argv.slice(2))
+
+// Execute
+Effect.runPromise(program)
+```
+
+## Command-Line Completions
+
+The CLI module supports shell completions for bash, zsh, and fish:
+
+```typescript
+import { Command } from "effect/unstable/cli"
+
+// Add completion command to your CLI
+const cli = Command.make("mycli")
+  .pipe(
+    Command.withSubcommands([init, build, test]),
+    Command.withCompletions() // Adds 'completions' subcommand
+  )
+
+// Users can then run:
+// mycli completions bash > /etc/bash_completion.d/mycli
+// mycli completions zsh > ~/.zsh/completions/_mycli
+// mycli completions fish > ~/.config/fish/completions/mycli.fish
+```
+
+## Best Practices
+
+1. **Type Safety** - Leverage TypeScript's type inference for command configs
+2. **Descriptions** - Always add descriptions to commands, flags, and arguments
+3. **Validation** - Use `mapEffect` to validate inputs with Effect
+4. **Defaults** - Provide sensible defaults for optional flags
+5. **Subcommands** - Organize complex CLIs with subcommands
+6. **Error Handling** - Handle CLI errors gracefully with proper messages
+7. **Prompts** - Use interactive prompts for better UX when appropriate
+
+## Related Modules
+
+- [AI](/api/unstable/ai) - AI and LLM integration
+- [Process](/api/unstable/process) - Child process management
+- [Cluster](/api/unstable/cluster) - Distributed computing

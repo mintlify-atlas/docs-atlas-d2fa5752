@@ -1,0 +1,513 @@
+---
+title: Duration
+description: Work with time spans and durations in Effect
+---
+
+The `Duration` module provides utilities for working with durations of time. A `Duration` is an immutable data type that represents a span of time with high precision, supporting operations from nanoseconds to weeks.
+
+## Overview
+
+Durations support:
+- **High precision** - Nanosecond-level accuracy using BigInt
+- **Multiple formats** - Numbers (millis), BigInt (nanos), tuples, strings
+- **Arithmetic operations** - Add, subtract, multiply, divide
+- **Comparisons** - Equal, less than, greater than
+- **Conversions** - Between different time units
+- **Human-readable formatting** - Pretty printing and parsing
+
+## Creating Durations
+
+### From Time Units
+
+Create durations using time unit constructors.
+
+```ts
+import { Duration } from "effect"
+
+// Milliseconds
+const ms = Duration.millis(1000)
+
+// Seconds
+const sec = Duration.seconds(30)
+
+// Minutes
+const min = Duration.minutes(5)
+
+// Hours
+const hr = Duration.hours(2)
+
+// Days
+const day = Duration.days(1)
+
+// Weeks
+const week = Duration.weeks(1)
+
+// Nanoseconds
+const nano = Duration.nanos(BigInt(500_000_000))
+
+// Microseconds
+const micro = Duration.micros(BigInt(500_000))
+```
+
+### From Strings
+
+Create durations from string literals.
+
+```ts
+import { Duration } from "effect"
+
+// Parse string format
+const duration1 = Duration.fromInputUnsafe("5 seconds")
+const duration2 = Duration.fromInputUnsafe("100 millis")
+const duration3 = Duration.fromInputUnsafe("2 minutes")
+const duration4 = Duration.fromInputUnsafe("1 hour")
+```
+
+### Special Durations
+
+```ts
+import { Duration } from "effect"
+
+// Zero duration
+const zero = Duration.zero
+
+// Infinite duration
+const inf = Duration.infinity
+
+// Negative infinite duration
+const negInf = Duration.negativeInfinity
+```
+
+## Type-Safe Input
+
+Use `Duration.Input` type for flexible duration parameters.
+
+```ts
+import { Duration, Effect } from "effect"
+
+function delay(duration: Duration.Input) {
+  return Effect.sleep(duration)
+}
+
+// All of these work
+delay(1000)                    // milliseconds as number
+delay("5 seconds")             // string format
+delay(Duration.minutes(2))     // Duration object
+delay(BigInt(1_000_000_000))  // nanoseconds as bigint
+delay([2, 500_000_000])        // [seconds, nanos] tuple
+```
+
+## Converting Durations
+
+### To Different Units
+
+Convert durations to different time units.
+
+```ts
+import { Duration } from "effect"
+
+const duration = Duration.seconds(90)
+
+// To milliseconds
+const millis = Duration.toMillis(duration) // 90000
+
+// To seconds
+const seconds = Duration.toSeconds(duration) // 90
+
+// To minutes
+const minutes = Duration.toMinutes(duration) // 1.5
+
+// To hours
+const hours = Duration.toHours(duration) // 0.025
+
+// To days
+const days = Duration.toDays(duration) // ~0.001
+
+// To weeks
+const weeks = Duration.toWeeks(duration) // ~0.00015
+```
+
+### To Nanoseconds
+
+```ts
+import { Duration } from "effect"
+
+const duration = Duration.seconds(2)
+
+// Unsafe - throws on infinity
+const nanos = Duration.toNanosUnsafe(duration) // 2000000000n
+
+// Safe - returns undefined on infinity
+const safeNanos = Duration.toNanos(duration) // 2000000000n or undefined
+```
+
+### To High-Resolution Time
+
+Convert to Node.js hrtime format.
+
+```ts
+import { Duration } from "effect"
+
+const duration = Duration.millis(1500)
+const hrtime = Duration.toHrTime(duration)
+console.log(hrtime) // [1, 500000000] - [seconds, nanos]
+```
+
+## Duration Arithmetic
+
+### Addition
+
+```ts
+import { Duration } from "effect"
+
+const duration1 = Duration.seconds(30)
+const duration2 = Duration.minutes(2)
+
+const total = Duration.sum(duration1, duration2)
+// 2 minutes 30 seconds
+```
+
+### Subtraction
+
+```ts
+import { Duration } from "effect"
+
+const duration1 = Duration.minutes(5)
+const duration2 = Duration.seconds(30)
+
+const difference = Duration.subtract(duration1, duration2)
+// 4 minutes 30 seconds
+```
+
+### Multiplication
+
+```ts
+import { Duration } from "effect"
+
+const duration = Duration.seconds(5)
+const doubled = Duration.times(duration, 2)
+// 10 seconds
+```
+
+### Division
+
+```ts
+import { Duration } from "effect"
+
+const duration = Duration.seconds(10)
+
+// Safe division - returns undefined on invalid divisor
+const halved = Duration.divide(duration, 2)
+// 5 seconds
+
+const invalid = Duration.divide(duration, 0)
+// undefined
+
+// Unsafe division - may return infinity/zero
+const halfedUnsafe = Duration.divideUnsafe(duration, 2)
+// 5 seconds
+```
+
+### Absolute Value and Negation
+
+```ts
+import { Duration } from "effect"
+
+const negative = Duration.seconds(-5)
+
+// Absolute value
+const positive = Duration.abs(negative)
+// 5 seconds
+
+// Negate
+const negated = Duration.negate(Duration.seconds(5))
+// -5 seconds
+```
+
+## Comparing Durations
+
+### Equality
+
+```ts
+import { Duration } from "effect"
+
+const duration1 = Duration.seconds(5)
+const duration2 = Duration.millis(5000)
+
+if (Duration.equals(duration1, duration2)) {
+  console.log("Durations are equal")
+}
+
+// Using Equivalence
+if (Duration.Equivalence(duration1, duration2)) {
+  console.log("Equivalent")
+}
+```
+
+### Ordering
+
+```ts
+import { Duration } from "effect"
+
+const short = Duration.seconds(3)
+const long = Duration.seconds(10)
+
+// Less than
+if (Duration.isLessThan(short, long)) {
+  console.log("short is less than long")
+}
+
+// Greater than
+if (Duration.isGreaterThan(long, short)) {
+  console.log("long is greater than short")
+}
+
+// Less than or equal
+if (Duration.isLessThanOrEqualTo(short, long)) {
+  console.log("short <= long")
+}
+
+// Greater than or equal
+if (Duration.isGreaterThanOrEqualTo(long, short)) {
+  console.log("long >= short")
+}
+```
+
+### Min and Max
+
+```ts
+import { Duration } from "effect"
+
+const duration1 = Duration.seconds(5)
+const duration2 = Duration.seconds(10)
+
+// Get minimum
+const shorter = Duration.min(duration1, duration2)
+// 5 seconds
+
+// Get maximum
+const longer = Duration.max(duration1, duration2)
+// 10 seconds
+```
+
+### Clamping
+
+```ts
+import { Duration } from "effect"
+
+const duration = Duration.seconds(15)
+
+const clamped = Duration.clamp(duration, {
+  minimum: Duration.seconds(5),
+  maximum: Duration.seconds(10)
+})
+// 10 seconds (clamped to maximum)
+```
+
+### Between Check
+
+```ts
+import { Duration } from "effect"
+
+const duration = Duration.seconds(7)
+
+const inRange = Duration.between(duration, {
+  minimum: Duration.seconds(5),
+  maximum: Duration.seconds(10)
+})
+// true
+```
+
+## Type Guards
+
+```ts
+import { Duration } from "effect"
+
+const duration = Duration.seconds(5)
+
+// Check if it's a Duration
+if (Duration.isDuration(duration)) {
+  console.log("Is a Duration")
+}
+
+// Check if finite
+if (Duration.isFinite(duration)) {
+  console.log("Is finite")
+}
+
+// Check if zero
+if (Duration.isZero(Duration.zero)) {
+  console.log("Is zero")
+}
+
+// Check if negative
+if (Duration.isNegative(Duration.seconds(-5))) {
+  console.log("Is negative")
+}
+
+// Check if positive
+if (Duration.isPositive(Duration.seconds(5))) {
+  console.log("Is positive")
+}
+```
+
+## Duration Parts
+
+Break down a duration into its components.
+
+```ts
+import { Duration } from "effect"
+
+// Create complex duration
+const complex = Duration.sum(
+  Duration.sum(
+    Duration.sum(Duration.days(1), Duration.hours(2)),
+    Duration.sum(Duration.minutes(30), Duration.seconds(45))
+  ),
+  Duration.millis(123)
+)
+
+const parts = Duration.parts(complex)
+console.log(parts)
+// {
+//   days: 1,
+//   hours: 2,
+//   minutes: 30,
+//   seconds: 45,
+//   millis: 123,
+//   nanos: 0
+// }
+```
+
+## Formatting
+
+Convert durations to human-readable strings.
+
+```ts
+import { Duration } from "effect"
+
+// Format as string
+const duration1 = Duration.millis(1000)
+console.log(Duration.format(duration1)) // "1s"
+
+const duration2 = Duration.millis(1001)
+console.log(Duration.format(duration2)) // "1s 1ms"
+
+const complex = Duration.sum(
+  Duration.hours(2),
+  Duration.minutes(30)
+)
+console.log(Duration.format(complex)) // "2h 30m"
+```
+
+## Pattern Matching
+
+Match on duration representations.
+
+```ts
+import { Duration } from "effect"
+
+const duration = Duration.seconds(5)
+
+const result = Duration.match(duration, {
+  onMillis: (millis) => `${millis} milliseconds`,
+  onNanos: (nanos) => `${nanos} nanoseconds`,
+  onInfinity: () => "infinite",
+  onNegativeInfinity: () => "negative infinite"
+})
+console.log(result) // "5000 milliseconds"
+```
+
+## Using with Effect
+
+Durations are commonly used with Effect operations.
+
+```ts
+import { Duration, Effect } from "effect"
+
+// Sleep
+const delayed = Effect.sleep("5 seconds")
+
+// Timeout
+const withTimeout = Effect.timeout(
+  someEffect,
+  Duration.seconds(30)
+)
+
+// Delay
+const delayed2 = Effect.delay(
+  someEffect,
+  Duration.millis(100)
+)
+
+// Schedule intervals
+const scheduled = Effect.schedule(
+  someEffect,
+  Schedule.spaced(Duration.seconds(5))
+)
+```
+
+## Reducers and Combiners
+
+```ts
+import { Duration, Array } from "effect"
+
+// Sum durations
+const durations = [
+  Duration.seconds(1),
+  Duration.seconds(2),
+  Duration.seconds(3)
+]
+
+const total = Array.reduce(
+  durations,
+  Duration.zero,
+  Duration.sum
+)
+// 6 seconds
+
+// Max duration
+const longest = Array.reduce(
+  durations,
+  Duration.zero,
+  Duration.max
+)
+// 3 seconds
+```
+
+## API Types
+
+```ts
+type Duration = {
+  readonly value: DurationValue
+}
+
+type DurationValue =
+  | { _tag: "Millis"; millis: number }
+  | { _tag: "Nanos"; nanos: bigint }
+  | { _tag: "Infinity" }
+  | { _tag: "NegativeInfinity" }
+
+type Duration.Input =
+  | Duration
+  | number                                    // millis
+  | bigint                                    // nanos
+  | readonly [seconds: number, nanos: number] // hrtime
+  | `${number} ${Unit}`                       // string
+
+type Unit =
+  | "nano" | "nanos"
+  | "micro" | "micros"
+  | "milli" | "millis"
+  | "second" | "seconds"
+  | "minute" | "minutes"
+  | "hour" | "hours"
+  | "day" | "days"
+  | "week" | "weeks"
+```
+
+## Related
+
+- [Clock](./clock) - System time access
+- [DateTime](./datetime) - Working with dates and times
+- [Schedule](./schedule) - Scheduling with durations

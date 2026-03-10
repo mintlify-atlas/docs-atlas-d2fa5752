@@ -1,0 +1,566 @@
+---
+title: Config
+description: Declarative, schema-driven configuration loading with type safety
+---
+
+# Config
+
+Declarative, schema-driven configuration loading. A `Config<T>` describes how to read and validate a value of type `T` from a `ConfigProvider`.
+
+## Mental Model
+
+- **Config\<T\>** - A recipe for extracting a typed value from a `ConfigProvider`
+- **ConfigProvider** - The backing data source (environment variables, JSON, .env files)
+- **ConfigError** - Wraps either a `SourceError` (I/O failure) or `SchemaError` (validation failure)
+- **parse** - Instance method that takes a provider and returns `Effect<T, ConfigError>`
+- **Yieldable** - Every `Config` can be yielded inside `Effect.gen`
+
+## Type Signature
+
+```typescript
+interface Config<out T> extends Pipeable, Effect.Yieldable<Config<T>, T, ConfigError> {
+  readonly parse: (provider: ConfigProvider) => Effect.Effect<T, ConfigError>
+}
+```
+
+<ParamField path="T" type="type parameter">
+  The type of value extracted from configuration
+</ParamField>
+
+## Creating Configs
+
+### string
+
+Reads a string config value.
+
+```typescript
+import { Config } from "effect"
+
+const host = Config.string("HOST")
+// Config<string>
+```
+
+**Signature:**
+```typescript
+function string(name?: string): Config<string>
+```
+
+<ParamField path="name" type="string">
+  Optional path segment for the config key
+</ParamField>
+
+<ResponseField name="returns" type="Config<string>">
+  A config that reads a string value
+</ResponseField>
+
+### number
+
+Reads a numeric config value.
+
+```typescript
+const port = Config.number("PORT")
+// Config<number>
+```
+
+**Signature:**
+```typescript
+function number(name?: string): Config<number>
+```
+
+### boolean
+
+Reads a boolean config value.
+
+```typescript
+const debug = Config.boolean("DEBUG")
+// Config<boolean>
+```
+
+**Signature:**
+```typescript
+function boolean(name?: string): Config<boolean>
+```
+
+### int
+
+Reads an integer config value.
+
+```typescript
+const maxConnections = Config.int("MAX_CONNECTIONS")
+// Config<number> (validated as integer)
+```
+
+**Signature:**
+```typescript
+function int(name?: string): Config<number>
+```
+
+### schema
+
+Builds a config from a Schema codec.
+
+```typescript
+import { Config, ConfigProvider, Schema } from "effect"
+
+const AppConfig = Config.schema(
+  Schema.Struct({
+    host: Schema.String,
+    port: Schema.Int
+  }),
+  "app"
+)
+
+const provider = ConfigProvider.fromEnv({
+  env: { app_host: "localhost", app_port: "8080" }
+})
+
+// Effect.runSync(AppConfig.parse(provider))
+// { host: "localhost", port: 8080 }
+```
+
+**Signature:**
+```typescript
+function schema<I, A>(
+  schema: Schema.Schema<A, I>,
+  name?: string
+): Config<A>
+```
+
+<ParamField path="schema" type="Schema.Schema<A, I>" required>
+  Schema that defines the structure and validation
+</ParamField>
+
+<ParamField path="name" type="string">
+  Optional root path segment
+</ParamField>
+
+<ResponseField name="returns" type="Config<A>">
+  A config that validates using the schema
+</ResponseField>
+
+## Transforming Configs
+
+### map
+
+Transforms the parsed value with a pure function.
+
+```typescript
+const upper = Config.string("name").pipe(
+  Config.map((s) => s.toUpperCase())
+)
+```
+
+**Signature:**
+```typescript
+function map<A, B>(f: (a: A) => B): (self: Config<A>) => Config<B>
+function map<A, B>(self: Config<A>, f: (a: A) => B): Config<B>
+```
+
+<ParamField path="f" type="(a: A) => B" required>
+  Pure transformation function
+</ParamField>
+
+<ResponseField name="returns" type="Config<B>">
+  A config with transformed output
+</ResponseField>
+
+### mapOrFail
+
+Transforms with a function that may fail.
+
+```typescript
+const trimmed = Config.string("name").pipe(
+  Config.mapOrFail((s) => Effect.succeed(s.trim()))
+)
+```
+
+**Signature:**
+```typescript
+function mapOrFail<A, B>(
+  f: (a: A) => Effect.Effect<B, ConfigError>
+): (self: Config<A>) => Config<B>
+```
+
+<ParamField path="f" type="(a: A) => Effect<B, ConfigError>" required>
+  Effectful transformation that may fail
+</ParamField>
+
+### withDefault
+
+Provides a default value when config is missing.
+
+```typescript
+const port = Config.number("PORT").pipe(
+  Config.withDefault(3000)
+)
+// Returns 3000 if PORT is not set
+```
+
+**Signature:**
+```typescript
+function withDefault<A>(
+  def: A
+): (self: Config<A>) => Config<A>
+```
+
+<ParamField path="def" type="A" required>
+  Default value to use when config is missing
+</ParamField>
+
+<Note>
+  `withDefault` only applies when the error is caused by **missing data**. Validation errors still propagate.
+</Note>
+
+### option
+
+Makes a config optional, returning `Option<A>` instead of `A`.
+
+```typescript
+const maybeApiKey = Config.string("API_KEY").pipe(
+  Config.option
+)
+// Config<Option<string>>
+```
+
+**Signature:**
+```typescript
+function option<A>(self: Config<A>): Config<Option<A>>
+```
+
+<ResponseField name="returns" type="Config<Option<A>>">
+  A config that returns None when missing, Some(value) when present
+</ResponseField>
+
+## Error Handling
+
+### orElse
+
+Falls back to another config when parsing fails.
+
+```typescript
+const config = Config.string("PRIMARY_URL").pipe(
+  Config.orElse(() => Config.string("FALLBACK_URL"))
+)
+```
+
+**Signature:**
+```typescript
+function orElse<A2>(
+  that: () => Config<A2>
+): <A>(self: Config<A>) => Config<A | A2>
+```
+
+<ParamField path="that" type="() => Config<A2>" required>
+  Fallback config factory (receives the error)
+</ParamField>
+
+### validate
+
+Adds validation to a config.
+
+```typescript
+const port = Config.number("PORT").pipe(
+  Config.validate((n) =>
+    n > 0 && n < 65536
+      ? Effect.succeed(n)
+      : Effect.fail(new ConfigError("Port must be 1-65535"))
+  )
+)
+```
+
+**Signature:**
+```typescript
+function validate<A>(
+  f: (a: A) => Effect.Effect<A, ConfigError>
+): (self: Config<A>) => Config<A>
+```
+
+## Combining Configs
+
+### all
+
+Combines multiple configs into one.
+
+```typescript
+const serverConfig = Config.all({
+  host: Config.string("HOST"),
+  port: Config.number("PORT"),
+  ssl: Config.boolean("SSL")
+})
+// Config<{ host: string; port: number; ssl: boolean }>
+```
+
+**Signature:**
+```typescript
+function all<const Configs extends Record<string, Config<any>>>(
+  configs: Configs
+): Config<{ [K in keyof Configs]: Config.Type<Configs[K]> }>
+
+function all<const Configs extends ReadonlyArray<Config<any>>>(
+  configs: Configs
+): Config<{ [K in keyof Configs]: Config.Type<Configs[K]> }>
+```
+
+<ParamField path="configs" type="Record<string, Config> | Array<Config>" required>
+  Object or array of configs to combine
+</ParamField>
+
+<ResponseField name="returns" type="Config<...>">
+  A single config that combines all inputs
+</ResponseField>
+
+## Specialized Configs
+
+### port
+
+Reads a valid port number (1-65535).
+
+```typescript
+const port = Config.port("PORT")
+// Config<number> (validated port)
+```
+
+**Signature:**
+```typescript
+function port(name?: string): Config<number>
+```
+
+### url
+
+Reads and parses a URL.
+
+```typescript
+const apiUrl = Config.url("API_URL")
+// Config<URL>
+```
+
+**Signature:**
+```typescript
+function url(name?: string): Config<URL>
+```
+
+### date
+
+Reads and parses a date.
+
+```typescript
+const startDate = Config.date("START_DATE")
+// Config<Date>
+```
+
+**Signature:**
+```typescript
+function date(name?: string): Config<Date>
+```
+
+### duration
+
+Reads a duration value.
+
+```typescript
+const timeout = Config.duration("TIMEOUT")
+// Config<Duration>
+```
+
+**Signature:**
+```typescript
+function duration(name?: string): Config<Duration>
+```
+
+### logLevel
+
+Reads a log level.
+
+```typescript
+const level = Config.logLevel("LOG_LEVEL")
+// Config<LogLevel>
+```
+
+**Signature:**
+```typescript
+function logLevel(name?: string): Config<LogLevel>
+```
+
+### redacted
+
+Reads a sensitive value (redacted in logs).
+
+```typescript
+const apiKey = Config.redacted("API_KEY")
+// Config<Redacted>
+```
+
+**Signature:**
+```typescript
+function redacted(name?: string): Config<Redacted>
+```
+
+## Creating Custom Configs
+
+### make
+
+Creates a config from a raw parsing function.
+
+```typescript
+const hostPort = Config.make((provider) =>
+  Effect.all({
+    host: Config.string("host").parse(provider),
+    port: Config.number("port").parse(provider)
+  })
+)
+```
+
+**Signature:**
+```typescript
+function make<T>(
+  parse: (provider: ConfigProvider) => Effect.Effect<T, ConfigError>
+): Config<T>
+```
+
+<ParamField path="parse" type="function" required>
+  Function that receives a provider and returns an effect
+</ParamField>
+
+<ResponseField name="returns" type="Config<T>">
+  A custom config implementation
+</ResponseField>
+
+### succeed
+
+Creates a config that always succeeds with a value.
+
+```typescript
+const defaultConfig = Config.succeed({ timeout: 5000 })
+```
+
+**Signature:**
+```typescript
+function succeed<A>(value: A): Config<A>
+```
+
+### fail
+
+Creates a config that always fails.
+
+```typescript
+const failConfig = Config.fail(
+  new ConfigError("Configuration not available")
+)
+```
+
+**Signature:**
+```typescript
+function fail(error: ConfigError): Config<never>
+```
+
+## Using Configs
+
+### Parsing with a Provider
+
+```typescript
+import { Config, ConfigProvider, Effect } from "effect"
+
+const appConfig = Config.schema(
+  Schema.Struct({
+    host: Schema.String,
+    port: Schema.Int
+  }),
+  "app"
+)
+
+const provider = ConfigProvider.fromEnv({
+  env: { app_host: "localhost", app_port: "8080" }
+})
+
+const program = Effect.gen(function*() {
+  const config = yield* appConfig.parse(provider)
+  console.log(config) // { host: "localhost", port: 8080 }
+})
+```
+
+### Yielding in Effect.gen
+
+```typescript
+const program = Effect.gen(function*() {
+  // Config automatically resolves from current ConfigProvider
+  const host = yield* Config.string("HOST")
+  const port = yield* Config.number("PORT")
+  
+  console.log(`Server: ${host}:${port}`)
+})
+```
+
+## ConfigError
+
+The error type for config failures.
+
+```typescript
+class ConfigError {
+  readonly _tag = "ConfigError"
+  readonly cause: SourceError | Schema.SchemaError
+  
+  constructor(cause: SourceError | Schema.SchemaError)
+  
+  get message(): string
+  toString(): string
+}
+```
+
+<ParamField path="cause" type="SourceError | Schema.SchemaError">
+  The underlying cause - either an I/O error or validation error
+</ParamField>
+
+## Complete Example
+
+```typescript
+import { Config, ConfigProvider, Effect, Schema } from "effect"
+
+// Define application configuration schema
+const AppConfig = Config.schema(
+  Schema.Struct({
+    server: Schema.Struct({
+      host: Schema.String,
+      port: Schema.Int.pipe(
+        Schema.filter((n) => n > 0 && n < 65536)
+      )
+    }),
+    database: Schema.Struct({
+      url: Schema.String,
+      maxConnections: Schema.Int
+    }),
+    features: Schema.Struct({
+      enableCache: Schema.Boolean,
+      logLevel: Schema.String
+    })
+  }),
+  "app"
+)
+
+// Extract type
+type AppConfig = Schema.Type<typeof AppConfig>
+
+// Create a provider from environment
+const provider = ConfigProvider.fromEnv({
+  env: {
+    app_server_host: "localhost",
+    app_server_port: "3000",
+    app_database_url: "postgresql://localhost/mydb",
+    app_database_maxConnections: "10",
+    app_features_enableCache: "true",
+    app_features_logLevel: "info"
+  }
+})
+
+// Use the config
+const program = Effect.gen(function*() {
+  const config = yield* AppConfig.parse(provider)
+  
+  console.log("Server:", `${config.server.host}:${config.server.port}`)
+  console.log("Database:", config.database.url)
+  console.log("Cache enabled:", config.features.enableCache)
+  
+  return config
+})
+
+Effect.runPromise(program)
+```

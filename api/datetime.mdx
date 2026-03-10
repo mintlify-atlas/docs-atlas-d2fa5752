@@ -1,0 +1,378 @@
+---
+title: DateTime
+description: Work with dates, times, and time zones in Effect
+---
+
+The `DateTime` module provides a type-safe, immutable way to work with dates and times. It supports both UTC and zoned date-times, with comprehensive time zone handling.
+
+## Overview
+
+A `DateTime` represents a point in time. It can be:
+- **UTC** - A simple timestamp without time zone information
+- **Zoned** - A timestamp with an associated time zone
+
+```ts
+import { DateTime } from "effect"
+
+// Create a UTC DateTime
+const utc: DateTime.Utc = DateTime.nowUnsafe()
+
+// Create a zoned DateTime
+const zoned: DateTime.Zoned = DateTime.makeZonedUnsafe(new Date(), {
+  timeZone: "Europe/London"
+})
+```
+
+## Creating DateTime
+
+### From Current Time
+
+Get the current date and time using the Clock service.
+
+```ts
+import { DateTime, Effect } from "effect"
+
+const program = Effect.gen(function*() {
+  // Get current time as UTC
+  const now = yield* DateTime.now
+  
+  // Get current time in a specific zone
+  const nowInZone = yield* DateTime.nowInCurrentZone.pipe(
+    DateTime.withCurrentZoneNamed("America/New_York")
+  )
+})
+```
+
+### From Different Inputs
+
+Create DateTime from various input types.
+
+```ts
+import { DateTime } from "effect"
+
+// From Date object
+const fromDate = DateTime.makeUnsafe(new Date())
+
+// From milliseconds
+const fromMillis = DateTime.makeUnsafe(1704067200000)
+
+// From string
+const fromString = DateTime.makeUnsafe("2024-01-01T12:00:00Z")
+
+// From parts
+const fromParts = DateTime.makeUnsafe({
+  year: 2024,
+  month: 1,
+  day: 15,
+  hours: 12,
+  minutes: 30
+})
+```
+
+### Safe Construction
+
+Use safe constructors that return `undefined` on invalid input.
+
+```ts
+import { DateTime } from "effect"
+
+// Returns undefined if invalid
+const safeDateTime = DateTime.make("invalid date")
+if (safeDateTime !== undefined) {
+  console.log("Valid date:", safeDateTime)
+}
+```
+
+## Working with Time Zones
+
+### Setting Time Zones
+
+Attach time zones to DateTime instances.
+
+```ts
+import { DateTime, Effect } from "effect"
+
+const program = Effect.gen(function*() {
+  const now = yield* DateTime.now
+  
+  // Create a named time zone
+  const zone = DateTime.zoneMakeNamedUnsafe("Europe/London")
+  
+  // Set the time zone
+  const londonTime: DateTime.Zoned = DateTime.setZone(now, zone)
+  
+  // Or use offset-based zone (in milliseconds)
+  const offsetTime = DateTime.setZoneOffset(now, 3 * 60 * 60 * 1000) // +3 hours
+})
+```
+
+### Time Zone Adjustment
+
+Control how times are interpreted in different zones.
+
+```ts
+import { DateTime } from "effect"
+
+// Create zoned DateTime without adjusting the time
+const utcInterpretation = DateTime.makeZonedUnsafe("2024-01-01T12:00:00Z", {
+  timeZone: "Europe/London"
+}) // 12:00 UTC shown in London time
+
+// Create zoned DateTime, adjusting for time zone
+const localInterpretation = DateTime.makeZonedUnsafe(
+  { year: 2024, month: 1, day: 1, hours: 12 },
+  { timeZone: "Europe/London", adjustForTimeZone: true }
+) // 12:00 in London time
+```
+
+### DST Disambiguation
+
+Handle ambiguous times during daylight saving transitions.
+
+```ts
+import { DateTime } from "effect"
+
+const timeZone = DateTime.zoneMakeNamedUnsafe("America/New_York")
+const ambiguousTime = { year: 2025, month: 11, day: 2, hours: 1, minutes: 30 }
+
+// Use earlier occurrence during fall-back
+const earlier = DateTime.makeZonedUnsafe(ambiguousTime, {
+  timeZone,
+  adjustForTimeZone: true,
+  disambiguation: "earlier"
+})
+
+// Use later occurrence
+const later = DateTime.makeZonedUnsafe(ambiguousTime, {
+  timeZone,
+  adjustForTimeZone: true,
+  disambiguation: "later"
+})
+```
+
+## Manipulating DateTime
+
+### Adding and Subtracting
+
+Perform date arithmetic.
+
+```ts
+import { DateTime } from "effect"
+
+const now = DateTime.nowUnsafe()
+
+// Add time
+const future = DateTime.add(now, { hours: 2, minutes: 30 })
+
+// Subtract time
+const past = DateTime.subtract(now, { days: 7 })
+
+// Start of day
+const startOfDay = DateTime.startOf(now, "day")
+
+// End of month
+const endOfMonth = DateTime.endOf(now, "month")
+```
+
+### Setting Parts
+
+Update specific parts of a DateTime.
+
+```ts
+import { DateTime } from "effect"
+
+const dt = DateTime.nowUnsafe()
+
+// Set specific parts
+const modified = DateTime.setParts(dt, {
+  year: 2025,
+  month: 6,
+  day: 15
+})
+
+// Set parts in UTC
+const modifiedUtc = DateTime.setPartsUtc(dt, {
+  hours: 18,
+  minutes: 0
+})
+```
+
+## Formatting
+
+Format DateTime for display.
+
+```ts
+import { DateTime } from "effect"
+
+const dt = DateTime.makeUnsafe("2024-01-15T14:30:00Z")
+
+// ISO format
+const iso = DateTime.formatIso(dt)
+// "2024-01-15T14:30:00.000Z"
+
+// Zoned ISO format
+const zoned = DateTime.makeZonedUnsafe(dt, {
+  timeZone: "America/New_York"
+})
+const zonedIso = DateTime.formatIsoZoned(zoned)
+// "2024-01-15T09:30:00.000-05:00[America/New_York]"
+
+// Custom format using Intl
+const custom = DateTime.format(dt, {
+  dateStyle: "full",
+  timeStyle: "short"
+})
+```
+
+## Comparisons
+
+Compare DateTime values.
+
+```ts
+import { DateTime } from "effect"
+
+const date1 = DateTime.makeUnsafe("2024-01-01")
+const date2 = DateTime.makeUnsafe("2024-02-01")
+
+// Comparison
+if (DateTime.isLessThan(date1, date2)) {
+  console.log("date1 is earlier")
+}
+
+// Equality
+if (DateTime.Equivalence(date1, date2)) {
+  console.log("Dates are equal")
+}
+
+// Min/Max
+const earlier = DateTime.min(date1, date2)
+const later = DateTime.max(date1, date2)
+
+// Distance
+const distance = DateTime.distance(date1, date2)
+const days = Duration.toDays(distance)
+```
+
+## Working with Parts
+
+Access individual components of a DateTime.
+
+```ts
+import { DateTime } from "effect"
+
+const dt = DateTime.makeUnsafe("2024-01-15T14:30:45.123Z")
+
+// Get all parts
+const parts = DateTime.toParts(dt)
+console.log(parts)
+// {
+//   year: 2024,
+//   month: 1,
+//   day: 15,
+//   hours: 14,
+//   minutes: 30,
+//   seconds: 45,
+//   millis: 123,
+//   weekDay: 1
+// }
+
+// Get specific part
+const year = DateTime.getPart(dt, "year")
+const month = DateTime.getPart(dt, "month")
+```
+
+## Conversions
+
+Convert DateTime to different formats.
+
+```ts
+import { DateTime } from "effect"
+
+const dt = DateTime.nowUnsafe()
+
+// To Date object
+const date = DateTime.toDate(dt)
+
+// To epoch milliseconds
+const millis = DateTime.toEpochMillis(dt)
+
+// Remove time component
+const dateOnly = DateTime.removeTime(dt)
+```
+
+## Current Time Zone Service
+
+Use the CurrentTimeZone service for zone-aware operations.
+
+```ts
+import { DateTime, Effect } from "effect"
+
+const program = Effect.gen(function*() {
+  // Use the current time zone
+  const now = yield* DateTime.nowInCurrentZone
+  
+  // Set zone for effect
+  const zoned = yield* DateTime.setZoneCurrent(DateTime.nowUnsafe())
+})
+
+// Provide a time zone
+const withZone = program.pipe(
+  DateTime.withCurrentZoneNamed("Europe/London")
+)
+
+// Use local time zone
+const withLocal = DateTime.withCurrentZoneLocal(program)
+```
+
+## Type Guards
+
+```ts
+import { DateTime } from "effect"
+
+const dt = DateTime.nowUnsafe()
+
+if (DateTime.isUtc(dt)) {
+  console.log("UTC DateTime")
+}
+
+if (DateTime.isZoned(dt)) {
+  console.log("Zoned DateTime")
+  console.log("Zone:", DateTime.zoneToString(dt.zone))
+}
+```
+
+## API Types
+
+```ts
+type DateTime = DateTime.Utc | DateTime.Zoned
+
+interface DateTime.Utc {
+  readonly _tag: "Utc"
+  readonly epochMillis: number
+}
+
+interface DateTime.Zoned {
+  readonly _tag: "Zoned"
+  readonly epochMillis: number
+  readonly zone: TimeZone
+}
+
+type DateTime.Input =
+  | DateTime
+  | Partial<Parts>
+  | Date
+  | number
+  | string
+
+type Disambiguation =
+  | "compatible" // Default
+  | "earlier"    // Choose earlier time
+  | "later"      // Choose later time
+  | "reject"     // Throw error
+```
+
+## Related
+
+- [Clock](./clock) - System time and delays
+- [Duration](./duration) - Time spans
+- [Schedule](./schedule) - Scheduling with DateTime

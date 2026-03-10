@@ -1,0 +1,339 @@
+---
+title: Platform Browser
+description: Browser platform-specific implementations for Effect
+---
+
+The `@effect/platform-browser` package provides browser-specific implementations of Effect's platform abstractions, enabling you to build client-side applications with HTTP clients, WebSockets, Web Workers, and browser APIs.
+
+## Installation
+
+```bash
+npm install @effect/platform-browser effect
+```
+
+This package is designed for use in web browsers and requires a bundler like Vite, Webpack, or esbuild.
+
+## When to Use
+
+Use `@effect/platform-browser` when:
+
+- Building client-side web applications
+- You need to make HTTP requests from the browser
+- You want to work with WebSockets or Web Workers
+- You need access to browser APIs (geolocation, clipboard, permissions, etc.)
+- Building Progressive Web Apps (PWAs)
+
+## Core Features
+
+### Runtime
+
+The `BrowserRuntime` module provides the entry point for running Effect programs in the browser:
+
+```typescript
+import { BrowserRuntime } from "@effect/platform-browser"
+import { Effect } from "effect"
+
+const program = Effect.gen(function* () {
+  yield* Effect.log("Hello from Browser!")
+  return "success"
+})
+
+BrowserRuntime.runMain(program)
+```
+
+**Features:**
+- Handles page unload events (cleanup on navigation)
+- Automatic error handling
+- Integrates with browser lifecycle
+
+### HTTP Client
+
+Make HTTP requests using the `BrowserHttpClient` module (built on fetch API):
+
+```typescript
+import { BrowserHttpClient } from "@effect/platform-browser"
+import { Effect } from "effect"
+import { HttpClient, HttpClientRequest } from "effect/unstable/http"
+
+const program = Effect.gen(function* () {
+  const client = yield* HttpClient.HttpClient
+  const response = yield* client.get("https://api.example.com/data")
+  const data = yield* response.json
+  return data
+}).pipe(Effect.provide(BrowserHttpClient.layer))
+
+BrowserRuntime.runMain(program)
+```
+
+**Features:**
+- Uses native fetch API
+- Automatic CORS handling
+- Supports all HTTP methods
+- Handles request/response transformations
+
+### WebSockets
+
+Connect to WebSocket servers using the `BrowserSocket` module:
+
+```typescript
+import { BrowserSocket } from "@effect/platform-browser"
+import { Effect, Stream } from "effect"
+import { Socket } from "effect/unstable/socket"
+
+const program = Effect.gen(function* () {
+  const socket = yield* BrowserSocket.make("wss://example.com/ws")
+  
+  // Send a message
+  yield* socket.write("Hello Server!")
+  
+  // Listen for messages
+  yield* socket.run.pipe(
+    Stream.tap((message) => Effect.log(`Received: ${message}`)),
+    Stream.take(10),
+    Stream.runDrain
+  )
+}).pipe(Effect.scoped)
+
+BrowserRuntime.runMain(program)
+```
+
+### Web Workers
+
+Manage Web Workers with the `BrowserWorker` module:
+
+```typescript
+import { BrowserWorker } from "@effect/platform-browser"
+import { Effect } from "effect"
+import { Worker } from "effect/unstable/platform"
+
+const program = Effect.gen(function* () {
+  const worker = yield* Worker.Worker
+  
+  // Send work to the worker
+  const result = yield* worker.execute({
+    task: "process",
+    data: [1, 2, 3, 4, 5]
+  })
+  
+  yield* Effect.log(`Worker result: ${result}`)
+}).pipe(Effect.provide(BrowserWorker.layer))
+
+BrowserRuntime.runMain(program)
+```
+
+### Key-Value Storage
+
+Use browser storage (localStorage/sessionStorage) with the `BrowserKeyValueStore` module:
+
+```typescript
+import { BrowserKeyValueStore } from "@effect/platform-browser"
+import { Effect } from "effect"
+import { KeyValueStore } from "effect/unstable/platform"
+
+const program = Effect.gen(function* () {
+  const store = yield* KeyValueStore.KeyValueStore
+  
+  // Save data
+  yield* store.set("user", { id: 1, name: "Alice" })
+  
+  // Retrieve data
+  const user = yield* store.get("user")
+  yield* Effect.log(`User: ${JSON.stringify(user)}`)
+  
+  // Remove data
+  yield* store.remove("user")
+}).pipe(Effect.provide(BrowserKeyValueStore.layerLocal))
+
+BrowserRuntime.runMain(program)
+```
+
+Supports both localStorage and sessionStorage:
+
+```typescript
+// Use localStorage (persistent)
+Effect.provide(BrowserKeyValueStore.layerLocal)
+
+// Use sessionStorage (per-session)
+Effect.provide(BrowserKeyValueStore.layerSession)
+```
+
+## Browser APIs
+
+### Geolocation
+
+Access device location with the `Geolocation` module:
+
+```typescript
+import { Geolocation } from "@effect/platform-browser"
+import { Effect } from "effect"
+
+const program = Effect.gen(function* () {
+  const geo = yield* Geolocation.Geolocation
+  
+  // Get current position
+  const position = yield* geo.getCurrentPosition()
+  yield* Effect.log(`Lat: ${position.coords.latitude}`)  
+  yield* Effect.log(`Lng: ${position.coords.longitude}`)
+  
+  // Watch position changes
+  yield* geo.watchPosition().pipe(
+    Stream.tap((pos) => Effect.log(`Moving to: ${pos.coords.latitude}`))
+  )
+}).pipe(Effect.provide(Geolocation.layer))
+
+BrowserRuntime.runMain(program)
+```
+
+### Clipboard
+
+Interact with the clipboard using the `Clipboard` module:
+
+```typescript
+import { Clipboard } from "@effect/platform-browser"
+import { Effect } from "effect"
+
+const program = Effect.gen(function* () {
+  const clipboard = yield* Clipboard.Clipboard
+  
+  // Write text to clipboard
+  yield* clipboard.writeText("Hello, Clipboard!")
+  
+  // Read text from clipboard
+  const text = yield* clipboard.readText()
+  yield* Effect.log(`Clipboard: ${text}`)
+}).pipe(Effect.provide(Clipboard.layer))
+
+BrowserRuntime.runMain(program)
+```
+
+### Permissions
+
+Check and request browser permissions with the `Permissions` module:
+
+```typescript
+import { Permissions } from "@effect/platform-browser"
+import { Effect } from "effect"
+
+const program = Effect.gen(function* () {
+  const permissions = yield* Permissions.Permissions
+  
+  // Check permission status
+  const status = yield* permissions.query({ name: "geolocation" })
+  yield* Effect.log(`Geolocation permission: ${status.state}`)
+  
+  // Request permission (if needed)
+  if (status.state === "prompt") {
+    const result = yield* permissions.request({ name: "geolocation" })
+    yield* Effect.log(`Permission ${result.state}`)
+  }
+}).pipe(Effect.provide(Permissions.layer))
+
+BrowserRuntime.runMain(program)
+```
+
+## Available Modules
+
+| Module | Description |
+|--------|-------------|
+| `BrowserRuntime` | Run Effect programs in the browser |
+| `BrowserHttpClient` | Make HTTP requests (fetch-based) |
+| `BrowserSocket` | WebSocket client |
+| `BrowserWorker` | Web Worker management |
+| `BrowserWorkerRunner` | Worker runner for parallel processing |
+| `BrowserKeyValueStore` | localStorage/sessionStorage access |
+| `BrowserStream` | Browser stream integration |
+| `Geolocation` | Access device location |
+| `Clipboard` | Read/write clipboard |
+| `Permissions` | Check and request permissions |
+
+## Streams and Reactive Programming
+
+The browser package integrates well with Effect's Stream module:
+
+```typescript
+import { BrowserSocket } from "@effect/platform-browser"
+import { Effect, Stream } from "effect"
+
+const program = Effect.gen(function* () {
+  const socket = yield* BrowserSocket.make("wss://example.com/ws")
+  
+  // Process incoming messages reactively
+  yield* socket.run.pipe(
+    Stream.map((msg) => JSON.parse(msg)),
+    Stream.filter((data) => data.type === "update"),
+    Stream.tap((data) => Effect.log(`Update: ${data.value}`)),
+    Stream.runDrain
+  )
+}).pipe(Effect.scoped)
+```
+
+## Integration with UI Frameworks
+
+You can integrate Effect with React, Vue, or other frameworks:
+
+```typescript
+import { BrowserRuntime, BrowserHttpClient } from "@effect/platform-browser"
+import { Effect } from "effect"
+import { HttpClient } from "effect/unstable/http"
+import { useState, useEffect } from "react"
+
+function UserProfile() {
+  const [user, setUser] = useState(null)
+  
+  useEffect(() => {
+    const program = Effect.gen(function* () {
+      const client = yield* HttpClient.HttpClient
+      const response = yield* client.get("/api/user")
+      return yield* response.json
+    }).pipe(Effect.provide(BrowserHttpClient.layer))
+    
+    BrowserRuntime.runPromise(program).then(setUser)
+  }, [])
+  
+  return <div>{user?.name}</div>
+}
+```
+
+## Error Handling
+
+Handle browser-specific errors gracefully:
+
+```typescript
+import { BrowserHttpClient } from "@effect/platform-browser"
+import { Effect } from "effect"
+import { HttpClient, HttpClientError } from "effect/unstable/http"
+
+const program = Effect.gen(function* () {
+  const client = yield* HttpClient.HttpClient
+  const response = yield* client.get("https://api.example.com/data")
+  return yield* response.json
+}).pipe(
+  Effect.catchTag("ResponseError", (error) =>
+    Effect.gen(function* () {
+      yield* Effect.log(`HTTP Error: ${error.response.status}`)
+      return { fallback: true }
+    })
+  ),
+  Effect.catchTag("RequestError", (error) =>
+    Effect.gen(function* () {
+      yield* Effect.log("Network error, check connection")
+      return { offline: true }
+    })
+  ),
+  Effect.provide(BrowserHttpClient.layer)
+)
+```
+
+## Dependencies
+
+The package has minimal external dependencies:
+
+- **multipasta**: Multipart form data handling
+
+Most functionality is built on native browser APIs.
+
+## Related Packages
+
+- [@effect/platform](/packages/platform) - Core platform abstractions
+- [@effect/platform-node](/packages/platform-node) - Node.js runtime implementations
+- [@effect/platform-bun](/packages/platform-bun) - Bun runtime implementations

@@ -1,0 +1,462 @@
+---
+title: Semaphore
+description: API reference for the Semaphore module in Effect v4
+---
+
+A `Semaphore` is a concurrency primitive that controls access to a shared permit pool. It's useful for limiting the number of concurrent operations or coordinating access to resources.
+
+## Overview
+
+Semaphores provide:
+
+- **Permit-based control**: Limit concurrent access with permits
+- **Blocking operations**: Tasks wait until permits are available
+- **FIFO fairness**: First-in, first-out ordering for waiting tasks
+- **Resize support**: Dynamically adjust available permits
+
+## Basic Usage
+
+```ts
+import { Effect, Semaphore } from "effect"
+
+const program = Effect.gen(function*() {
+  const semaphore = yield* Semaphore.make(2)
+
+  return yield* semaphore.withPermits(1)(
+    Effect.succeed("Resource accessed")
+  )
+})
+```
+
+## Types
+
+### Semaphore
+
+```ts
+interface Semaphore {
+  resize(permits: number): Effect<void>
+  withPermits(permits: number): <A, E, R>(self: Effect<A, E, R>) => Effect<A, E, R>
+  withPermit<A, E, R>(self: Effect<A, E, R>): Effect<A, E, R>
+  withPermitsIfAvailable(permits: number): <A, E, R>(self: Effect<A, E, R>) => Effect<Option<A>, E, R>
+  take(permits: number): Effect<number>
+  release(permits: number): Effect<number>
+  releaseAll: Effect<number>
+}
+```
+
+The main interface for working with semaphores.
+
+## Creating Semaphores
+
+### make
+
+```ts
+const make: (permits: number) => Effect<Semaphore>
+```
+
+Creates a new Semaphore with the specified number of permits.
+
+```ts
+import { Effect, Semaphore } from "effect"
+
+const program = Effect.gen(function*() {
+  const semaphore = yield* Semaphore.make(2)
+
+  const task = (id: number) =>
+    semaphore.withPermits(1)(
+      Effect.gen(function*() {
+        yield* Effect.log(`Task ${id} acquired permit`)
+        yield* Effect.sleep("1 second")
+        yield* Effect.log(`Task ${id} releasing permit`)
+      })
+    )
+
+  // Run 4 tasks, but only 2 can run concurrently
+  yield* Effect.all([task(1), task(2), task(3), task(4)])
+})
+```
+
+### makeUnsafe
+
+```ts
+const makeUnsafe: (permits: number) => Semaphore
+```
+
+Unsafely creates a new Semaphore without Effect wrapping.
+
+```ts
+import { Effect, Semaphore } from "effect"
+
+const semaphore = Semaphore.makeUnsafe(3)
+
+const task = (id: number) =>
+  semaphore.withPermits(1)(
+    Effect.gen(function*() {
+      yield* Effect.log(`Task ${id} started`)
+      yield* Effect.sleep("1 second")
+      yield* Effect.log(`Task ${id} completed`)
+    })
+  )
+
+// Only 3 tasks can run concurrently
+const program = Effect.all([
+  task(1),
+  task(2),
+  task(3),
+  task(4),
+  task(5)
+], { concurrency: "unbounded" })
+```
+
+## Using Permits
+
+### withPermits
+
+```ts
+withPermits(permits: number): <A, E, R>(self: Effect<A, E, R>) => Effect<A, E, R>
+```
+
+Runs an effect with the specified number of permits, automatically acquiring and releasing them.
+
+```ts
+import { Effect, Semaphore } from "effect"
+
+const program = Effect.gen(function*() {
+  const semaphore = yield* Semaphore.make(3)
+
+  const heavyTask = Effect.gen(function*() {
+    yield* Effect.log("Starting heavy computation")
+    yield* Effect.sleep("2 seconds")
+    yield* Effect.log("Completed heavy computation")
+    return 42
+  })
+
+  // Acquire 2 permits for this task
+  const result = yield* semaphore.withPermits(2)(heavyTask)
+  console.log(result) // 42
+})
+```
+
+### withPermit
+
+```ts
+withPermit<A, E, R>(self: Effect<A, E, R>): Effect<A, E, R>
+```
+
+Runs an effect with a single permit. Shorthand for `withPermits(1)`.
+
+```ts
+import { Effect, Semaphore } from "effect"
+
+const program = Effect.gen(function*() {
+  const semaphore = yield* Semaphore.make(5)
+
+  const task = Effect.gen(function*() {
+    yield* Effect.log("Accessing resource")
+    yield* Effect.sleep("1 second")
+    return "result"
+  })
+
+  const result = yield* semaphore.withPermit(task)
+  console.log(result) // "result"
+})
+```
+
+### withPermitsIfAvailable
+
+```ts
+withPermitsIfAvailable(permits: number): <A, E, R>(self: Effect<A, E, R>) => Effect<Option<A>, E, R>
+```
+
+Runs an effect only if the specified number of permits are immediately available. Returns `Option.none` if permits are not available.
+
+```ts
+import { Effect, Option, Semaphore } from "effect"
+
+const program = Effect.gen(function*() {
+  const semaphore = yield* Semaphore.make(2)
+
+  // Acquire all permits
+  yield* semaphore.take(2)
+
+  const task = Effect.succeed("Task completed")
+
+  // Try to run without waiting
+  const result = yield* semaphore.withPermitsIfAvailable(1)(task)
+
+  if (Option.isNone(result)) {
+    console.log("No permits available, skipping task")
+  } else {
+    console.log("Task ran:", result.value)
+  }
+})
+```
+
+## Manual Permit Management
+
+### take
+
+```ts
+take(permits: number): Effect<number>
+```
+
+Acquires the specified number of permits, suspending if they are not available. Returns the resulting available permits.
+
+```ts
+import { Effect, Semaphore } from "effect"
+
+const program = Effect.gen(function*() {
+  const semaphore = yield* Semaphore.make(5)
+
+  // Manually acquire permits
+  const remaining = yield* semaphore.take(2)
+  console.log("Permits remaining:", remaining) // 3
+
+  // Do work here...
+  yield* Effect.log("Working with acquired permits")
+
+  // Don't forget to release!
+  yield* semaphore.release(2)
+})
+```
+
+### release
+
+```ts
+release(permits: number): Effect<number>
+```
+
+Releases the specified number of permits and returns the resulting available permits.
+
+```ts
+import { Effect, Semaphore } from "effect"
+
+const program = Effect.gen(function*() {
+  const semaphore = yield* Semaphore.make(5)
+
+  yield* semaphore.take(3)
+  yield* Effect.log("Working...")
+  
+  const available = yield* semaphore.release(3)
+  console.log("Permits available after release:", available) // 5
+})
+```
+
+### releaseAll
+
+```ts
+releaseAll: Effect<number>
+```
+
+Releases all permits held by this semaphore.
+
+```ts
+import { Effect, Semaphore } from "effect"
+
+const program = Effect.gen(function*() {
+  const semaphore = yield* Semaphore.make(10)
+
+  yield* semaphore.take(7)
+  console.log("Taken 7 permits")
+
+  const available = yield* semaphore.releaseAll
+  console.log("All permits released, available:", available) // 10
+})
+```
+
+## Resizing
+
+### resize
+
+```ts
+resize(permits: number): Effect<void>
+```
+
+Adjusts the number of permits available in the semaphore.
+
+```ts
+import { Effect, Semaphore } from "effect"
+
+const program = Effect.gen(function*() {
+  const semaphore = yield* Semaphore.make(3)
+
+  // Use initial capacity
+  yield* semaphore.take(2)
+
+  // Increase capacity dynamically
+  yield* semaphore.resize(5)
+  console.log("Semaphore capacity increased to 5")
+
+  // More permits now available
+  yield* semaphore.take(3) // Would have blocked with capacity 3
+})
+```
+
+## Common Patterns
+
+### Rate Limiting
+
+Control the rate of concurrent operations:
+
+```ts
+import { Effect, Semaphore } from "effect"
+
+const program = Effect.gen(function*() {
+  // Allow max 3 concurrent API calls
+  const rateLimiter = yield* Semaphore.make(3)
+
+  const apiCall = (id: number) =>
+    rateLimiter.withPermit(
+      Effect.gen(function*() {
+        yield* Effect.log(`API call ${id} started`)
+        yield* Effect.sleep("1 second")
+        yield* Effect.log(`API call ${id} completed`)
+        return `result-${id}`
+      })
+    )
+
+  // Make 10 API calls, but only 3 will run concurrently
+  const results = yield* Effect.all(
+    Array.from({ length: 10 }, (_, i) => apiCall(i + 1)),
+    { concurrency: "unbounded" }
+  )
+
+  console.log("All calls completed:", results)
+})
+```
+
+### Resource Pool
+
+Manage access to a limited resource pool:
+
+```ts
+import { Effect, Semaphore } from "effect"
+
+const program = Effect.gen(function*() {
+  // 5 database connections available
+  const dbConnectionPool = yield* Semaphore.make(5)
+
+  const queryDatabase = (query: string) =>
+    dbConnectionPool.withPermit(
+      Effect.gen(function*() {
+        yield* Effect.log(`Executing query: ${query}`)
+        yield* Effect.sleep("500 millis")
+        return `result for ${query}`
+      })
+    )
+
+  // Execute multiple queries
+  const results = yield* Effect.all([
+    queryDatabase("SELECT * FROM users"),
+    queryDatabase("SELECT * FROM orders"),
+    queryDatabase("SELECT * FROM products")
+  ])
+
+  console.log(results)
+})
+```
+
+### Weighted Permits
+
+Different tasks can require different numbers of permits:
+
+```ts
+import { Effect, Semaphore } from "effect"
+
+const program = Effect.gen(function*() {
+  const semaphore = yield* Semaphore.make(10)
+
+  const lightTask = semaphore.withPermits(1)(
+    Effect.gen(function*() {
+      yield* Effect.log("Light task running")
+      yield* Effect.sleep("500 millis")
+    })
+  )
+
+  const heavyTask = semaphore.withPermits(5)(
+    Effect.gen(function*() {
+      yield* Effect.log("Heavy task running")
+      yield* Effect.sleep("2 seconds")
+    })
+  )
+
+  // Heavy task uses 5 permits, light tasks use 1 each
+  yield* Effect.all([heavyTask, lightTask, lightTask], {
+    concurrency: "unbounded"
+  })
+})
+```
+
+## Partitioned Semaphores
+
+### Partitioned
+
+```ts
+interface Partitioned<in K> {
+  readonly withPermits: (
+    key: K,
+    permits: number
+  ) => <A, E, R>(effect: Effect<A, E, R>) => Effect<A, E, R>
+}
+```
+
+A `Partitioned` semaphore controls access to a shared permit pool while tracking waiters by partition key. Waiting permits are distributed across partitions in round-robin order.
+
+### makePartitioned
+
+```ts
+const makePartitioned: <K = unknown>(options: {
+  readonly permits: number
+}) => Effect<Partitioned<K>>
+```
+
+Creates a `Partitioned` semaphore.
+
+```ts
+import { Effect, Semaphore } from "effect"
+
+const program = Effect.gen(function*() {
+  const semaphore = yield* Semaphore.makePartitioned<string>({
+    permits: 5
+  })
+
+  const task = (userId: string, taskId: number) =>
+    semaphore.withPermits(userId, 1)(
+      Effect.gen(function*() {
+        yield* Effect.log(`User ${userId}, Task ${taskId} running`)
+        yield* Effect.sleep("1 second")
+      })
+    )
+
+  // Tasks are partitioned by user ID
+  yield* Effect.all([
+    task("user1", 1),
+    task("user1", 2),
+    task("user2", 1),
+    task("user2", 2)
+  ], { concurrency: "unbounded" })
+})
+```
+
+### makePartitionedUnsafe
+
+```ts
+const makePartitionedUnsafe: <K = unknown>(options: {
+  readonly permits: number
+}) => Partitioned<K>
+```
+
+Unsafely creates a `Partitioned` semaphore.
+
+```ts
+import { Effect, Semaphore } from "effect"
+
+const semaphore = Semaphore.makePartitionedUnsafe<string>({
+  permits: 10
+})
+
+const limitedByUser = (userId: string) =>
+  semaphore.withPermits(userId, 1)(
+    Effect.log(`Processing for ${userId}`)
+  )
+```

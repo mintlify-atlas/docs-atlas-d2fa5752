@@ -1,0 +1,535 @@
+---
+title: Stream
+description: Pull-based streams with backpressure for processing multiple values
+---
+
+# Stream
+
+A `Stream<A, E, R>` describes a program that can emit many `A` values, fail with `E`, and require `R`.
+
+Streams are pull-based with backpressure and emit chunks to amortize effect evaluation. They support monadic composition and error handling similar to `Effect`, adapted for multiple values.
+
+## Type Signature
+
+```typescript
+interface Stream<out A, out E = never, out R = never>
+```
+
+<ParamField path="A" type="type parameter">
+  The type of values emitted by the stream
+</ParamField>
+
+<ParamField path="E" type="type parameter" default="never">
+  The error type the stream may fail with
+</ParamField>
+
+<ParamField path="R" type="type parameter" default="never">
+  The context/services required to run the stream
+</ParamField>
+
+## Key Features
+
+- **Pull-based**: Consumers control the rate of emission (backpressure)
+- **Chunked**: Values are emitted in chunks for efficiency
+- **Composable**: Rich set of operators for transformation
+- **Resource-safe**: Automatic cleanup with scoped resources
+- **Concurrent**: Built-in support for parallel processing
+- **Interruptible**: Streams can be safely interrupted
+
+## Creating Streams
+
+### make
+
+Creates a stream from a sequence of values.
+
+```typescript
+const stream = Stream.make(1, 2, 3)
+// Stream<number>
+```
+
+**Signature:**
+```typescript
+function make<const As extends ReadonlyArray<any>>(
+  ...values: As
+): Stream<As[number]>
+```
+
+<ParamField path="values" type="...As" required>
+  The values to emit from the stream
+</ParamField>
+
+<ResponseField name="returns" type="Stream<As[number]>">
+  A stream that emits all provided values
+</ResponseField>
+
+### succeed
+
+Creates a single-valued pure stream.
+
+```typescript
+const stream = Stream.succeed(42)
+// Stream<number> that emits 42
+```
+
+**Signature:**
+```typescript
+function succeed<A>(value: A): Stream<A>
+```
+
+<ParamField path="value" type="A" required>
+  The single value to emit
+</ParamField>
+
+<ResponseField name="returns" type="Stream<A>">
+  A stream that emits the single value
+</ResponseField>
+
+### empty
+
+Creates an empty stream that emits no values.
+
+```typescript
+const stream = Stream.empty
+// Stream<never>
+```
+
+**Signature:**
+```typescript
+const empty: Stream<never>
+```
+
+### sync
+
+Creates a stream that synchronously evaluates a function and emits the result.
+
+```typescript
+const stream = Stream.sync(() => Date.now())
+// Stream<number> - emits current timestamp
+```
+
+**Signature:**
+```typescript
+function sync<A>(evaluate: () => A): Stream<A>
+```
+
+<ParamField path="evaluate" type="() => A" required>
+  Function evaluated each time the stream runs
+</ParamField>
+
+<ResponseField name="returns" type="Stream<A>">
+  A stream that emits the function result
+</ResponseField>
+
+### suspend
+
+Creates a lazily constructed stream.
+
+```typescript
+const stream = Stream.suspend(() => Stream.make(1, 2, 3))
+// Stream is reconstructed on each run
+```
+
+**Signature:**
+```typescript
+function suspend<A, E, R>(
+  stream: () => Stream<A, E, R>
+): Stream<A, E, R>
+```
+
+<ParamField path="stream" type="() => Stream<A, E, R>" required>
+  Factory function that creates the stream
+</ParamField>
+
+<ResponseField name="returns" type="Stream<A, E, R>">
+  A lazily evaluated stream
+</ResponseField>
+
+### callback
+
+Creates a stream from a callback that can emit values into a queue.
+
+```typescript
+import { Effect, Queue, Stream } from "effect"
+
+const stream = Stream.callback<number>((queue) =>
+  Effect.sync(() => {
+    Queue.offerUnsafe(queue, 1)
+    Queue.offerUnsafe(queue, 2)
+    Queue.offerUnsafe(queue, 3)
+    Queue.endUnsafe(queue)
+  })
+)
+```
+
+**Signature:**
+```typescript
+function callback<A, E = never, R = never>(
+  f: (queue: Queue.Queue<A, E | Cause.Done>) => Effect.Effect<unknown, E, R | Scope>,
+  options?: {
+    bufferSize?: number
+    strategy?: "sliding" | "dropping" | "suspend"
+  }
+): Stream<A, E, Exclude<R, Scope>>
+```
+
+<ParamField path="f" type="callback function" required>
+  Function that emits values to a queue
+</ParamField>
+
+<ParamField path="options.bufferSize" type="number">
+  Size of the buffer (default: unbounded)
+</ParamField>
+
+<ParamField path="options.strategy" type="string">
+  Backpressure strategy: `"sliding"`, `"dropping"`, or `"suspend"`
+</ParamField>
+
+<ResponseField name="returns" type="Stream<A, E, R>">
+  A stream that emits the queued values
+</ResponseField>
+
+## Transforming Streams
+
+### map
+
+Transforms each emitted value.
+
+```typescript
+const doubled = Stream.make(1, 2, 3).pipe(
+  Stream.map((n) => n * 2)
+)
+// Stream<number> emitting 2, 4, 6
+```
+
+**Signature:**
+```typescript
+function map<A, B>(
+  f: (a: A) => B
+): <E, R>(self: Stream<A, E, R>) => Stream<B, E, R>
+```
+
+### filter
+
+Filters stream values based on a predicate.
+
+```typescript
+const evens = Stream.make(1, 2, 3, 4).pipe(
+  Stream.filter((n) => n % 2 === 0)
+)
+// Stream<number> emitting 2, 4
+```
+
+**Signature:**
+```typescript
+function filter<A, B extends A>(
+  predicate: Refinement<A, B>
+): <E, R>(self: Stream<A, E, R>) => Stream<B, E, R>
+
+function filter<A>(
+  predicate: Predicate<A>
+): <E, R>(self: Stream<A, E, R>) => Stream<A, E, R>
+```
+
+### flatMap
+
+Transforms each value into a stream and flattens the result.
+
+```typescript
+const stream = Stream.make(1, 2, 3).pipe(
+  Stream.flatMap((n) => Stream.make(n, n * 10))
+)
+// Stream<number> emitting 1, 10, 2, 20, 3, 30
+```
+
+**Signature:**
+```typescript
+function flatMap<A, B, E2, R2>(
+  f: (a: A) => Stream<B, E2, R2>,
+  options?: { concurrency?: Concurrency }
+): <E, R>(self: Stream<A, E, R>) => Stream<B, E | E2, R | R2>
+```
+
+<ParamField path="f" type="(a: A) => Stream<B, E2, R2>" required>
+  Function that maps each value to a stream
+</ParamField>
+
+<ParamField path="options.concurrency" type="Concurrency">
+  Controls concurrency: `"sequential"`, `"unbounded"`, or a number
+</ParamField>
+
+### take
+
+Takes the first n elements from the stream.
+
+```typescript
+const first3 = Stream.make(1, 2, 3, 4, 5).pipe(
+  Stream.take(3)
+)
+// Stream<number> emitting 1, 2, 3
+```
+
+**Signature:**
+```typescript
+function take(
+  n: number
+): <A, E, R>(self: Stream<A, E, R>) => Stream<A, E, R>
+```
+
+### drop
+
+Drops the first n elements from the stream.
+
+```typescript
+const afterFirst2 = Stream.make(1, 2, 3, 4, 5).pipe(
+  Stream.drop(2)
+)
+// Stream<number> emitting 3, 4, 5
+```
+
+**Signature:**
+```typescript
+function drop(
+  n: number
+): <A, E, R>(self: Stream<A, E, R>) => Stream<A, E, R>
+```
+
+## Running Streams
+
+### runCollect
+
+Collects all values from a stream into an array.
+
+```typescript
+const program = Effect.gen(function*() {
+  const values = yield* Stream.make(1, 2, 3).pipe(
+    Stream.runCollect
+  )
+  console.log(values) // [1, 2, 3]
+})
+```
+
+**Signature:**
+```typescript
+function runCollect<A, E, R>(
+  self: Stream<A, E, R>
+): Effect.Effect<Array<A>, E, R>
+```
+
+<ResponseField name="returns" type="Effect<Array<A>, E, R>">
+  An effect that collects all stream values into an array
+</ResponseField>
+
+### runForEach
+
+Runs an effect for each value in the stream.
+
+```typescript
+const program = Stream.make(1, 2, 3).pipe(
+  Stream.runForEach((n) => Console.log(`Value: ${n}`))
+)
+// Logs: Value: 1, Value: 2, Value: 3
+```
+
+**Signature:**
+```typescript
+function runForEach<A, E2, R2>(
+  f: (a: A) => Effect.Effect<any, E2, R2>
+): <E, R>(self: Stream<A, E, R>) => Effect.Effect<void, E | E2, R | R2>
+```
+
+### runFold
+
+Folds over the stream to produce a single accumulated value.
+
+```typescript
+const sum = Stream.make(1, 2, 3, 4).pipe(
+  Stream.runFold(0, (acc, n) => acc + n)
+)
+// Effect<number> with result 10
+```
+
+**Signature:**
+```typescript
+function runFold<A, S>(
+  initial: S,
+  f: (s: S, a: A) => S
+): <E, R>(self: Stream<A, E, R>) => Effect.Effect<S, E, R>
+```
+
+<ParamField path="initial" type="S" required>
+  Initial accumulator value
+</ParamField>
+
+<ParamField path="f" type="(s: S, a: A) => S" required>
+  Folding function that combines accumulator with each value
+</ParamField>
+
+## Combining Streams
+
+### concat
+
+Concatenates two streams.
+
+```typescript
+const combined = Stream.make(1, 2).pipe(
+  Stream.concat(Stream.make(3, 4))
+)
+// Stream<number> emitting 1, 2, 3, 4
+```
+
+**Signature:**
+```typescript
+function concat<A2, E2, R2>(
+  that: Stream<A2, E2, R2>
+): <A, E, R>(self: Stream<A, E, R>) => Stream<A | A2, E | E2, R | R2>
+```
+
+### merge
+
+Merges two streams, emitting values from both concurrently.
+
+```typescript
+const merged = Stream.make(1, 2).pipe(
+  Stream.merge(Stream.make(3, 4))
+)
+// Stream<number> emitting values from both streams concurrently
+```
+
+**Signature:**
+```typescript
+function merge<A2, E2, R2>(
+  that: Stream<A2, E2, R2>,
+  options?: { haltStrategy?: HaltStrategy }
+): <A, E, R>(self: Stream<A, E, R>) => Stream<A | A2, E | E2, R | R2>
+```
+
+### zip
+
+Zips two streams together element-wise.
+
+```typescript
+const zipped = Stream.make(1, 2, 3).pipe(
+  Stream.zip(Stream.make("a", "b", "c"))
+)
+// Stream<[number, string]> emitting [1, "a"], [2, "b"], [3, "c"]
+```
+
+**Signature:**
+```typescript
+function zip<A2, E2, R2>(
+  that: Stream<A2, E2, R2>
+): <A, E, R>(self: Stream<A, E, R>) => Stream<[A, A2], E | E2, R | R2>
+```
+
+## Error Handling
+
+### catchAll
+
+Handles all errors in a stream by providing a recovery stream.
+
+```typescript
+const recovered = Stream.fail("error").pipe(
+  Stream.catchAll((error) => Stream.succeed(`Recovered: ${error}`))
+)
+```
+
+**Signature:**
+```typescript
+function catchAll<E, A2, E2, R2>(
+  f: (e: E) => Stream<A2, E2, R2>
+): <A, R>(self: Stream<A, E, R>) => Stream<A | A2, E2, R | R2>
+```
+
+### orElse
+
+Tries a stream, and if it fails, tries another stream.
+
+```typescript
+const fallback = Stream.fail("error").pipe(
+  Stream.orElse(() => Stream.succeed("fallback"))
+)
+```
+
+**Signature:**
+```typescript
+function orElse<A2, E2, R2>(
+  that: () => Stream<A2, E2, R2>
+): <A, E, R>(self: Stream<A, E, R>) => Stream<A | A2, E2, R | R2>
+```
+
+## Constants
+
+### DefaultChunkSize
+
+The default chunk size used by Stream constructors and combinators.
+
+```typescript
+console.log(Stream.DefaultChunkSize) // 4096
+```
+
+## Type Utilities
+
+### Success
+
+Extracts the value type from a Stream.
+
+```typescript
+type MyStream = Stream<number, string, never>
+type ValueType = Stream.Success<MyStream> // number
+```
+
+### Error
+
+Extracts the error type from a Stream.
+
+```typescript
+type MyStream = Stream<number, string, never>
+type ErrorType = Stream.Error<MyStream> // string
+```
+
+### Services
+
+Extracts the services type from a Stream.
+
+```typescript
+type MyStream = Stream<number, string, Database>
+type RequiredServices = Stream.Services<MyStream> // Database
+```
+
+## Complete Example
+
+```typescript
+import { Console, Effect, Stream } from "effect"
+
+// Create a stream from multiple sources
+const numbers = Stream.make(1, 2, 3, 4, 5)
+
+// Transform and process the stream
+const program = Effect.gen(function*() {
+  // Transform values
+  const transformed = numbers.pipe(
+    Stream.filter((n) => n % 2 === 0),
+    Stream.map((n) => n * 10),
+    Stream.take(2)
+  )
+  
+  // Collect results
+  const results = yield* Stream.runCollect(transformed)
+  yield* Console.log(`Results: ${results}`)
+  // Output: Results: [20, 40]
+  
+  // Process with effects
+  yield* numbers.pipe(
+    Stream.runForEach((n) => Console.log(`Processing: ${n}`))
+  )
+  
+  // Fold to aggregate
+  const sum = yield* numbers.pipe(
+    Stream.runFold(0, (acc, n) => acc + n)
+  )
+  yield* Console.log(`Sum: ${sum}`)
+  // Output: Sum: 15
+})
+
+Effect.runPromise(program)
+```

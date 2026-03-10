@@ -1,0 +1,383 @@
+---
+title: Layers
+description: Learn how to create, compose, and provide layers in Effect v4 for dependency injection
+---
+
+Layers are Effect's solution for dependency injection. They describe how to build services and manage their dependencies, allowing you to construct complex application graphs in a type-safe, composable way.
+
+## What is a Layer?
+
+A `Layer<ROut, E, RIn>` is a blueprint for constructing services:
+- **ROut**: The services this layer produces
+- **E**: The errors that can occur during construction
+- **RIn**: The services this layer requires
+
+<Info>
+  Layers are constructed once and shared across your application. They handle initialization, dependency resolution, and cleanup automatically.
+</Info>
+
+## Creating Layers
+
+### Layer.effect
+
+The most common way to create a layer is with `Layer.effect`, which constructs a service from an Effect:
+
+```typescript
+import { Effect, Layer, Schema, ServiceMap } from "effect"
+
+class DatabaseError extends Schema.TaggedErrorClass<DatabaseError>()("DatabaseError", {
+  cause: Schema.Defect
+}) {}
+
+export class Database extends ServiceMap.Service<Database, {
+  query(sql: string): Effect.Effect<Array<unknown>, DatabaseError>
+}>()("myapp/db/Database") {
+  static readonly layer = Layer.effect(
+    Database,
+    Effect.gen(function*() {
+      // Initialization logic here
+      yield* Effect.log("Initializing database connection...")
+      
+      const query = Effect.fn("Database.query")(function*(sql: string) {
+        yield* Effect.log("Executing SQL query:", sql)
+        return [{ id: 1, name: "Alice" }, { id: 2, name: "Bob" }]
+      })
+
+      return Database.of({ query })
+    })
+  )
+}
+```
+
+### Layer.succeed
+
+Use `Layer.succeed` to create a layer from a pre-constructed service value:
+
+```typescript
+import { Layer } from "effect"
+
+const TestDatabaseLayer = Layer.succeed(
+  Database,
+  Database.of({
+    query: Effect.fn("Database.query")(() => 
+      Effect.succeed([{ id: 1, name: "Test User" }])
+    )
+  })
+)
+```
+
+<Note>
+  `Layer.succeed` is commonly used for testing, where you want to provide a mock implementation.
+</Note>
+
+### Layer.effectDiscard
+
+Use `Layer.effectDiscard` when you want to run background tasks without providing a service:
+
+```typescript
+import { Effect, Layer } from "effect"
+
+// Use Layer.effectDiscard when you want to create a layer that runs an effect
+// but does not provide any services.
+const BackgroundTask = Layer.effectDiscard(Effect.gen(function*() {
+  yield* Effect.logInfo("Starting background task...")
+
+  yield* Effect.gen(function*() {
+    while (true) {
+      yield* Effect.sleep("5 seconds")
+      yield* Effect.logInfo("Background task running...")
+    }
+  }).pipe(
+    Effect.onInterrupt(() => Effect.logInfo("Background task interrupted: layer scope closed")),
+    Effect.forkScoped
+  )
+}))
+```
+
+<Tip>
+  Background tasks created with `Layer.effectDiscard` are automatically interrupted when the layer scope closes.
+</Tip>
+
+## Composing Layers
+
+Layers become powerful when you compose them to build complex dependency graphs.
+
+### Layer.provide - Hide Dependencies
+
+Use `Layer.provide` to satisfy a layer's requirements while hiding the provided dependencies:
+
+```typescript
+import { Config, Layer } from "effect"
+import { PgClient } from "@effect/sql-pg"
+import { SqlClient } from "effect/unstable/sql"
+
+export const SqlClientLayer = PgClient.layerConfig({
+  url: Config.redacted("DATABASE_URL")
+})
+
+export class UserRepository extends ServiceMap.Service<UserRepository, {
+  findById(id: string): Effect.Effect<Option.Option<User>, UserRepositoryError>
+}>()("myapp/UserRepository") {
+  static readonly layerNoDeps: Layer.Layer<
+    UserRepository,
+    never,
+    SqlClient.SqlClient
+  > = Layer.effect(
+    UserRepository,
+    Effect.gen(function*() {
+      const sql = yield* SqlClient.SqlClient
+      // ... implementation
+      return UserRepository.of({ findById })
+    })
+  )
+
+  // Use Layer.provide to hide SqlClient from consumers
+  static readonly layer = this.layerNoDeps.pipe(
+    Layer.provide(SqlClientLayer)
+  )
+  // Type: Layer<UserRepository, Config.ConfigError | SqlError.SqlError, never>
+  // SqlClient is hidden!
+}
+```
+
+<Accordion title="When to use Layer.provide">
+  Use `Layer.provide` when:
+  - You want to encapsulate implementation details
+  - Dependencies are internal concerns of the service
+  - Consumers shouldn't directly access the dependencies
+  
+  This creates a clean public API for your service.
+</Accordion>
+
+### Layer.provideMerge - Expose Dependencies
+
+Use `Layer.provideMerge` when you want to expose both the service and its dependencies:
+
+```typescript
+export class UserRepository extends ServiceMap.Service<UserRepository, {
+  findById(id: string): Effect.Effect<Option.Option<User>, UserRepositoryError>
+}>()("myapp/UserRepository") {
+  static readonly layerNoDeps: Layer.Layer<
+    UserRepository,
+    never,
+    SqlClient.SqlClient
+  > = /* ... */
+
+  // Use Layer.provideMerge to expose both UserRepository and SqlClient
+  static readonly layerWithSqlClient = this.layerNoDeps.pipe(
+    Layer.provideMerge(SqlClientLayer)
+  )
+  // Type: Layer<UserRepository | SqlClient.SqlClient, Config.ConfigError | SqlError.SqlError, never>
+  // Both services are available!
+}
+```
+
+<Accordion title="When to use Layer.provideMerge">
+  Use `Layer.provideMerge` when:
+  - Consumers need direct access to both services
+  - You want to expose shared infrastructure (like a database connection)
+  - Multiple services should share the same dependency instance
+  
+  This is useful for building application-wide layers.
+</Accordion>
+
+### Layer.merge - Combine Independent Layers
+
+Use `Layer.merge` to combine multiple independent layers:
+
+```typescript
+import { Layer } from "effect"
+
+const AppLayer = Layer.merge(
+  Database.layer,
+  Cache.layer,
+  Logger.layer
+)
+// Type: Layer<Database | Cache | Logger, ...errors, never>
+```
+
+## Providing Layers to Effects
+
+Once you've built your layers, provide them to your Effect programs:
+
+### Effect.provide
+
+Provide a layer to an effect:
+
+```typescript
+import { Effect } from "effect"
+
+const program = Effect.gen(function*() {
+  const db = yield* Database
+  const results = yield* db.query("SELECT * FROM users")
+  return results
+})
+
+// Provide the Database layer
+const runnable = program.pipe(
+  Effect.provide(Database.layer)
+)
+// Type: Effect<Array<unknown>, DatabaseError, never>
+// No more requirements!
+```
+
+### Effect.provideService
+
+Provide a service directly without a layer:
+
+```typescript
+const testDb = Database.of({
+  query: Effect.fn("Database.query")(() => Effect.succeed([]))
+})
+
+const testProgram = program.pipe(
+  Effect.provideService(Database, testDb)
+)
+```
+
+<Tip>
+  Use `Effect.provideService` for quick tests or simple cases. Use `Effect.provide` with proper layers for production code.
+</Tip>
+
+## Layer Patterns
+
+### The layerNoDeps Pattern
+
+A common pattern is to create two layer variants:
+
+```typescript
+export class MyService extends ServiceMap.Service<MyService, Interface>()("app/MyService") {
+  // Layer with explicit dependencies
+  static readonly layerNoDeps: Layer.Layer<MyService, never, Dependency1 | Dependency2> = 
+    Layer.effect(MyService, /* ... */)
+  
+  // Layer with dependencies hidden
+  static readonly layer: Layer.Layer<MyService, SomeError, never> = 
+    this.layerNoDeps.pipe(
+      Layer.provide(Layer.merge(Dependency1.layer, Dependency2.layer))
+    )
+}
+```
+
+<Accordion title="Benefits of the layerNoDeps pattern">
+  This pattern provides:
+  - **Flexibility**: Users can provide their own dependency implementations
+  - **Testing**: Easy to inject mocks via `layerNoDeps`
+  - **Convenience**: Simple `layer` for typical usage
+  - **Composition**: Clear dependency graph for complex applications
+</Accordion>
+
+### Dynamic Layer Construction with Layer.unwrap
+
+Build layers dynamically from configuration or effects:
+
+```typescript
+import { Config, Effect, Layer } from "effect"
+
+export class ApiClient extends ServiceMap.Service<ApiClient, Interface>()("app/ApiClient") {
+  static readonly layer = Layer.unwrap(
+    Effect.gen(function*() {
+      const apiKey = yield* Config.redacted("API_KEY")
+      const baseUrl = yield* Config.string("API_BASE_URL")
+      
+      // Return a layer constructed from config
+      return Layer.succeed(
+        ApiClient,
+        ApiClient.of({
+          /* methods using apiKey and baseUrl */
+        })
+      )
+    })
+  )
+}
+```
+
+## Running Layers
+
+### Layer.launch
+
+For long-running applications, use `Layer.launch` as your entry point:
+
+```typescript
+import { Layer } from "effect"
+import { NodeRuntime } from "@effect/platform-node"
+
+const MainLayer = Layer.merge(
+  Database.layer,
+  BackgroundTask,
+  HttpServer.layer
+)
+
+MainLayer.pipe(
+  Layer.launch,
+  NodeRuntime.runMain
+)
+```
+
+<Info>
+  `Layer.launch` keeps the program running until interrupted, making it perfect for servers and background services.
+</Info>
+
+## Scopes and Lifecycle
+
+Layers are scoped, meaning resources are automatically cleaned up:
+
+```typescript
+import { Effect, Layer } from "effect"
+
+const ResourceLayer = Layer.effect(
+  MyService,
+  Effect.gen(function*() {
+    // Acquire resource
+    const resource = yield* Effect.acquireRelease(
+      Effect.sync(() => createResource()),
+      (resource) => Effect.sync(() => resource.close())
+    )
+    
+    // Use resource to build service
+    return MyService.of({ /* methods using resource */ })
+  })
+)
+```
+
+<Note>
+  When a layer scope closes (e.g., when the program exits), all resources are properly released in reverse order of acquisition.
+</Note>
+
+## Best Practices
+
+<Steps>
+  <Step title="Use Layer.effect for stateful services">
+    When your service needs initialization, database connections, or resources
+  </Step>
+  <Step title="Use Layer.succeed for simple services">
+    For pure, stateless services or test mocks
+  </Step>
+  <Step title="Provide both layerNoDeps and layer variants">
+    Give users flexibility while maintaining convenience
+  </Step>
+  <Step title="Use Layer.provide to hide implementation details">
+    Keep internal dependencies private
+  </Step>
+  <Step title="Use Layer.provideMerge to share infrastructure">
+    When multiple services need the same connection pool, cache, etc.
+  </Step>
+</Steps>
+
+<Warning>
+  Avoid circular dependencies between layers. Effect will detect these at runtime and fail fast.
+</Warning>
+
+## Next Steps
+
+<Steps>
+  <Step title="Master Error Handling">
+    Learn how to handle errors in services at [Error Handling](/concepts/error-handling)
+  </Step>
+  <Step title="Manage Resources">
+    Understand resource cleanup patterns in [Resources](/concepts/resources)
+  </Step>
+  <Step title="Build Services">
+    Review service patterns in [Services](/concepts/services)
+  </Step>
+</Steps>

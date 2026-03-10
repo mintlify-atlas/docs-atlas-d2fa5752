@@ -1,0 +1,356 @@
+---
+title: '@effect/vitest'
+description: 'Testing utilities for Effect with Vitest'
+icon: 'flask'
+---
+
+A comprehensive testing library for Effect-based applications using Vitest, providing utilities for testing Effects with automatic resource cleanup, test clocks, and layer management.
+
+## Installation
+
+```bash
+pnpm add -D vitest @effect/vitest
+```
+
+## Basic Usage
+
+Import the enhanced `it` function from `@effect/vitest`:
+
+```ts
+import { it, expect } from "@effect/vitest"
+import { Effect } from "effect"
+```
+
+## Testing Effects
+
+Use `it.effect` to write tests for Effect programs:
+
+```ts
+import { it, expect } from "@effect/vitest"
+import { Effect } from "effect"
+
+function divide(a: number, b: number) {
+  if (b === 0) return Effect.fail("Cannot divide by zero")
+  return Effect.succeed(a / b)
+}
+
+it.effect("divides two numbers", () =>
+  Effect.gen(function*() {
+    const result = yield* divide(10, 2)
+    expect(result).toBe(5)
+  })
+)
+```
+
+## Testing Success and Failure
+
+Use `Effect.exit` to test both success and failure cases:
+
+```ts
+import { it, expect } from "@effect/vitest"
+import { Effect, Exit } from "effect"
+
+it.effect("handles success", () =>
+  Effect.gen(function*() {
+    const result = yield* Effect.exit(divide(10, 2))
+    expect(result).toStrictEqual(Exit.succeed(5))
+  })
+)
+
+it.effect("handles division by zero", () =>
+  Effect.gen(function*() {
+    const result = yield* Effect.exit(divide(10, 0))
+    expect(result).toStrictEqual(Exit.fail("Cannot divide by zero"))
+  })
+)
+```
+
+## Test Clock
+
+`it.effect` automatically provides a `TestContext` with a `TestClock` for simulating time:
+
+```ts
+import { it } from "@effect/vitest"
+import { Clock, Effect, TestClock } from "effect"
+
+it.effect("tests with simulated time", () =>
+  Effect.gen(function*() {
+    const start = yield* Clock.currentTimeMillis
+    console.log(start) // 0
+    
+    yield* TestClock.adjust("1 second")
+    
+    const after = yield* Clock.currentTimeMillis
+    console.log(after) // 1000
+  })
+)
+```
+
+## Live Environment
+
+Use `it.live` to run tests with the real-time clock:
+
+```ts
+import { it } from "@effect/vitest"
+import { Clock, Effect } from "effect"
+
+it.live("uses real time", () =>
+  Effect.gen(function*() {
+    const now = yield* Clock.currentTimeMillis
+    console.log(now) // Actual system time
+  })
+)
+```
+
+## Scoped Tests
+
+Use `it.scoped` for tests that require resource management:
+
+```ts
+import { it } from "@effect/vitest"
+import { Console, Effect } from "effect"
+
+it.scoped("manages resources", () =>
+  Effect.gen(function*() {
+    const resource = yield* Effect.acquireRelease(
+      Console.log("acquire"),
+      () => Console.log("release")
+    )
+    
+    // Resource is automatically released after the test
+  })
+)
+```
+
+## Layer Testing
+
+Share layers between tests using `it.layer`:
+
+```ts
+import { it, layer } from "@effect/vitest"
+import { Effect, Layer, ServiceMap } from "effect"
+
+class Database extends ServiceMap.Service("Database")<Database, {
+  query: (sql: string) => Effect.Effect<string>
+}>() {
+  static Live = Layer.succeed(Database, {
+    query: (sql) => Effect.succeed(`Result for: ${sql}`)
+  })
+}
+
+layer(Database.Live)("database tests", (it) => {
+  it.effect("queries the database", () =>
+    Effect.gen(function*() {
+      const db = yield* Database
+      const result = yield* db.query("SELECT * FROM users")
+      expect(result).toContain("Result for")
+    })
+  )
+  
+  it.effect("performs another query", () =>
+    Effect.gen(function*() {
+      const db = yield* Database
+      const result = yield* db.query("SELECT * FROM posts")
+      expect(result).toContain("Result for")
+    })
+  )
+})
+```
+
+## Nested Layers
+
+Layers can be nested for more complex test scenarios:
+
+```ts
+import { layer } from "@effect/vitest"
+import { Effect, Layer, ServiceMap } from "effect"
+
+class Config extends ServiceMap.Service("Config")<Config, { apiUrl: string }>() {
+  static Live = Layer.succeed(Config, { apiUrl: "https://api.example.com" })
+}
+
+class ApiClient extends ServiceMap.Service("ApiClient")<ApiClient, {
+  fetch: (path: string) => Effect.Effect<string>
+}>() {
+  static Live = Layer.effect(ApiClient,
+    Effect.gen(function*() {
+      const config = yield* Config
+      return {
+        fetch: (path) => Effect.succeed(`${config.apiUrl}${path}`)
+      }
+    })
+  )
+}
+
+layer(Config.Live)("with config", (it) => {
+  it.layer(ApiClient.Live)("with api client", (it) => {
+    it.effect("makes API calls", () =>
+      Effect.gen(function*() {
+        const client = yield* ApiClient
+        const result = yield* client.fetch("/users")
+        expect(result).toBe("https://api.example.com/users")
+      })
+    )
+  })
+})
+```
+
+## Property-Based Testing
+
+Use `it.prop` for property-based testing with FastCheck:
+
+```ts
+import { it } from "@effect/vitest"
+import { Effect, Schema } from "effect"
+
+it.effect.prop(
+  "string length is always positive",
+  { str: Schema.String },
+  ({ str }) =>
+    Effect.gen(function*() {
+      expect(str.length).toBeGreaterThanOrEqual(0)
+    })
+)
+
+it.effect.prop(
+  "addition is commutative",
+  { a: Schema.Number, b: Schema.Number },
+  ({ a, b }) =>
+    Effect.gen(function*() {
+      expect(a + b).toBe(b + a)
+    })
+)
+```
+
+## Flaky Tests
+
+Handle tests that may occasionally fail:
+
+```ts
+import { it, flakyTest } from "@effect/vitest"
+import { Effect, Random } from "effect"
+
+const flaky = Effect.gen(function*() {
+  const random = yield* Random.nextBoolean
+  if (!random) {
+    return yield* Effect.fail("Random failure")
+  }
+})
+
+it.effect("retries until success", () =>
+  flakyTest(flaky, "5 seconds")
+)
+```
+
+## Test Modifiers
+
+### Skip Tests
+
+```ts
+it.effect.skip("skipped test", () =>
+  Effect.void
+)
+```
+
+### Run Only Specific Tests
+
+```ts
+it.effect.only("only this test runs", () =>
+  Effect.void
+)
+```
+
+### Skip Conditionally
+
+```ts
+it.effect.skipIf(process.env.CI)("skip in CI", () =>
+  Effect.void
+)
+```
+
+### Run Conditionally
+
+```ts
+it.effect.runIf(!process.env.CI)("run locally only", () =>
+  Effect.void
+)
+```
+
+### Expect Failure
+
+```ts
+it.effect.fails("this test should fail", () =>
+  Effect.die("Expected failure")
+)
+```
+
+## Parameterized Tests
+
+Run the same test with different inputs:
+
+```ts
+import { it, expect } from "@effect/vitest"
+import { Effect } from "effect"
+
+it.effect.each([
+  { input: 2, expected: 4 },
+  { input: 3, expected: 9 },
+  { input: 4, expected: 16 }
+])("squares $input to get $expected", ({ input, expected }) =>
+  Effect.gen(function*() {
+    const result = input * input
+    expect(result).toBe(expected)
+  })
+)
+```
+
+## Logging in Tests
+
+By default, logs are suppressed. Enable them when needed:
+
+```ts
+import { it } from "@effect/vitest"
+import { Effect, Logger } from "effect"
+
+// Logs are suppressed
+it.effect("no logs", () =>
+  Effect.log("This won't be shown")
+)
+
+// Provide a logger to see logs
+it.effect("with logs", () =>
+  Effect.log("This will be shown").pipe(
+    Effect.provide(Logger.pretty)
+  )
+)
+
+// Use it.live to enable logs by default
+it.live("live with logs", () =>
+  Effect.log("This will be shown")
+)
+```
+
+## Equality Testers
+
+Add custom equality testers for Effect types:
+
+```ts
+import { addEqualityTesters } from "@effect/vitest"
+
+// Call once in your test setup
+addEqualityTesters()
+```
+
+## API Reference
+
+- **it.effect**: Test Effect programs with TestContext
+- **it.live**: Test with live environment (real time)
+- **it.scoped**: Test with Scope for resource management
+- **it.layer**: Share layers between tests
+- **it.prop**: Property-based testing
+- **flakyTest**: Retry tests until success or timeout
+- **addEqualityTesters**: Add Effect equality testers to Vitest
+
+## Related Packages
+
+- [@effect/opentelemetry](/packages/opentelemetry)

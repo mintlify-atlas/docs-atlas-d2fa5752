@@ -1,0 +1,635 @@
+---
+title: FileSystem
+description: Cross-platform file system operations with Effect
+---
+
+The `FileSystem` module provides a comprehensive abstraction for file system operations that work across platforms. All operations return Effect values for composable, functional file I/O with proper error handling.
+
+## Overview
+
+The FileSystem interface offers both synchronous and asynchronous file operations through Effect, including:
+- File reading and writing (binary and text)
+- Directory management
+- File permissions and metadata
+- Streaming file operations
+- File watching
+- Temporary file/directory creation
+
+## Basic Usage
+
+```ts
+import { Console, Effect, FileSystem } from "effect"
+
+const program = Effect.gen(function*() {
+  const fs = yield* FileSystem.FileSystem
+
+  // Create a directory
+  yield* fs.makeDirectory("./temp", { recursive: true })
+
+  // Write a file
+  yield* fs.writeFileString("./temp/hello.txt", "Hello, World!")
+
+  // Read the file back
+  const content = yield* fs.readFileString("./temp/hello.txt")
+  yield* Console.log("File content:", content)
+
+  // Get file information
+  const stats = yield* fs.stat("./temp/hello.txt")
+  yield* Console.log("File size:", stats.size)
+
+  // Clean up
+  yield* fs.remove("./temp", { recursive: true })
+})
+```
+
+## File Operations
+
+### Reading Files
+
+#### `readFile`
+
+Reads a file as binary data (Uint8Array).
+
+```ts
+readFile: (path: string) => Effect.Effect<Uint8Array, PlatformError>
+```
+
+**Example:**
+```ts
+const program = Effect.gen(function*() {
+  const fs = yield* FileSystem.FileSystem
+  const data = yield* fs.readFile("./data.bin")
+  yield* Console.log(`Read ${data.length} bytes`)
+})
+```
+
+#### `readFileString`
+
+Reads a file as a text string with optional encoding.
+
+```ts
+readFileString: (
+  path: string,
+  encoding?: string
+) => Effect.Effect<string, PlatformError>
+```
+
+**Example:**
+```ts
+const program = Effect.gen(function*() {
+  const fs = yield* FileSystem.FileSystem
+  const content = yield* fs.readFileString("./config.json")
+  const config = JSON.parse(content)
+  yield* Console.log("Config:", config)
+})
+```
+
+### Writing Files
+
+#### `writeFile`
+
+Writes binary data to a file.
+
+```ts
+writeFile: (
+  path: string,
+  data: Uint8Array,
+  options?: {
+    readonly flag?: OpenFlag | undefined
+    readonly mode?: number | undefined
+  }
+) => Effect.Effect<void, PlatformError>
+```
+
+#### `writeFileString`
+
+Writes a string to a file.
+
+```ts
+writeFileString: (
+  path: string,
+  data: string,
+  options?: {
+    readonly flag?: OpenFlag | undefined
+    readonly mode?: number | undefined
+  }
+) => Effect.Effect<void, PlatformError>
+```
+
+**Example:**
+```ts
+const program = Effect.gen(function*() {
+  const fs = yield* FileSystem.FileSystem
+  
+  // Write with default flags (truncate if exists)
+  yield* fs.writeFileString("./output.txt", "Hello, World!")
+  
+  // Append to file
+  yield* fs.writeFileString("./log.txt", "New log entry\n", {
+    flag: "a"
+  })
+})
+```
+
+### File Information
+
+#### `stat`
+
+Retrieves comprehensive file or directory information.
+
+```ts
+stat: (path: string) => Effect.Effect<File.Info, PlatformError>
+```
+
+The `File.Info` structure includes:
+- `type`: File type (File, Directory, SymbolicLink, etc.)
+- `size`: File size in bytes
+- `mtime`, `atime`, `birthtime`: Timestamps
+- `mode`: Permissions
+- `uid`, `gid`: User/group IDs
+
+**Example:**
+```ts
+const program = Effect.gen(function*() {
+  const fs = yield* FileSystem.FileSystem
+  
+  const info = yield* fs.stat("./data.txt")
+  
+  yield* Console.log(`File type: ${info.type}`)
+  yield* Console.log(`File size: ${info.size} bytes`)
+  yield* Console.log(`Modified: ${info.mtime?.toISOString()}")
+  
+  if (info.type === "File") {
+    yield* Console.log("Processing regular file...")
+  }
+})
+```
+
+#### `exists`
+
+Checks if a path exists.
+
+```ts
+exists: (path: string) => Effect.Effect<boolean, PlatformError>
+```
+
+**Example:**
+```ts
+const program = Effect.gen(function*() {
+  const fs = yield* FileSystem.FileSystem
+  
+  const exists = yield* fs.exists("./config.json")
+  if (!exists) {
+    yield* fs.writeFileString("./config.json", '{"env": "development"}')
+  }
+})
+```
+
+## Directory Operations
+
+### `makeDirectory`
+
+Creates a directory with optional recursive creation.
+
+```ts
+makeDirectory: (
+  path: string,
+  options?: {
+    readonly recursive?: boolean | undefined
+    readonly mode?: number | undefined
+  }
+) => Effect.Effect<void, PlatformError>
+```
+
+**Example:**
+```ts
+const program = Effect.gen(function*() {
+  const fs = yield* FileSystem.FileSystem
+  
+  // Create nested directories
+  yield* fs.makeDirectory("./data/users/profiles", { recursive: true })
+})
+```
+
+### `readDirectory`
+
+Lists directory contents with optional recursive listing.
+
+```ts
+readDirectory: (
+  path: string,
+  options?: {
+    readonly recursive?: boolean | undefined
+  }
+) => Effect.Effect<Array<string>, PlatformError>
+```
+
+**Example:**
+```ts
+const program = Effect.gen(function*() {
+  const fs = yield* FileSystem.FileSystem
+  
+  // List immediate children
+  const files = yield* fs.readDirectory("./src")
+  yield* Console.log("Files:", files)
+  
+  // List all files recursively
+  const allFiles = yield* fs.readDirectory("./src", { recursive: true })
+  yield* Console.log("All files:", allFiles)
+})
+```
+
+### `remove`
+
+Removes a file or directory.
+
+```ts
+remove: (
+  path: string,
+  options?: {
+    readonly recursive?: boolean | undefined
+    readonly force?: boolean | undefined
+  }
+) => Effect.Effect<void, PlatformError>
+```
+
+**Example:**
+```ts
+const program = Effect.gen(function*() {
+  const fs = yield* FileSystem.FileSystem
+  
+  // Remove directory and all contents
+  yield* fs.remove("./temp", { recursive: true })
+  
+  // Remove file, ignore if it doesn't exist
+  yield* fs.remove("./cache.txt", { force: true })
+})
+```
+
+## Streaming Operations
+
+### `stream`
+
+Creates a readable Stream for file contents.
+
+```ts
+stream: (
+  path: string,
+  options?: {
+    readonly bytesToRead?: SizeInput | undefined
+    readonly chunkSize?: SizeInput | undefined
+    readonly offset?: SizeInput | undefined
+  }
+) => Stream.Stream<Uint8Array, PlatformError>
+```
+
+**Example:**
+```ts
+import { Effect, FileSystem, Stream } from "effect"
+
+const program = Effect.gen(function*() {
+  const fs = yield* FileSystem.FileSystem
+  
+  // Stream file in 64KB chunks
+  const stream = fs.stream("./large-file.bin", {
+    chunkSize: FileSystem.KiB(64)
+  })
+  
+  // Process chunks
+  yield* Stream.runForEach(stream, (chunk) =>
+    Effect.log(`Processing ${chunk.length} bytes`)
+  )
+})
+```
+
+### `sink`
+
+Creates a writable Sink for file output.
+
+```ts
+sink: (
+  path: string,
+  options?: {
+    readonly flag?: OpenFlag | undefined
+    readonly mode?: number | undefined
+  }
+) => Sink.Sink<void, Uint8Array, never, PlatformError>
+```
+
+**Example:**
+```ts
+import { Effect, FileSystem, Stream } from "effect"
+
+const program = Effect.gen(function*() {
+  const fs = yield* FileSystem.FileSystem
+  
+  // Create a sink and write data to it
+  const sink = fs.sink("./output.bin")
+  
+  // Stream data to file
+  const dataStream = Stream.make(
+    new Uint8Array([1, 2, 3]),
+    new Uint8Array([4, 5, 6])
+  )
+  
+  yield* Stream.run(dataStream, sink)
+})
+```
+
+## Temporary Files
+
+### `makeTempDirectory`
+
+Creates a temporary directory.
+
+```ts
+makeTempDirectory: (options?: {
+  readonly directory?: string | undefined
+  readonly prefix?: string | undefined
+}) => Effect.Effect<string, PlatformError>
+```
+
+### `makeTempDirectoryScoped`
+
+Creates a temporary directory that's automatically deleted when the scope closes.
+
+```ts
+makeTempDirectoryScoped: (options?: {
+  readonly directory?: string | undefined
+  readonly prefix?: string | undefined
+}) => Effect.Effect<string, PlatformError, Scope>
+```
+
+**Example:**
+```ts
+import { Effect, FileSystem } from "effect"
+
+const program = Effect.scoped(
+  Effect.gen(function*() {
+    const fs = yield* FileSystem.FileSystem
+    
+    // Directory is automatically cleaned up
+    const tmpDir = yield* fs.makeTempDirectoryScoped({
+      prefix: "my-app-"
+    })
+    
+    yield* fs.writeFileString(`${tmpDir}/data.txt`, "temporary")
+    yield* Effect.log(`Using temp dir: ${tmpDir}`)
+    
+    // Directory deleted when scope exits
+  })
+)
+```
+
+## File Operations
+
+### `copy`
+
+Copies a file or directory (equivalent to `cp -r`).
+
+```ts
+copy: (
+  fromPath: string,
+  toPath: string,
+  options?: {
+    readonly overwrite?: boolean | undefined
+    readonly preserveTimestamps?: boolean | undefined
+  }
+) => Effect.Effect<void, PlatformError>
+```
+
+### `rename`
+
+Renames or moves a file or directory.
+
+```ts
+rename: (
+  oldPath: string,
+  newPath: string
+) => Effect.Effect<void, PlatformError>
+```
+
+### `symlink`
+
+Creates a symbolic link.
+
+```ts
+symlink: (
+  fromPath: string,
+  toPath: string
+) => Effect.Effect<void, PlatformError>
+```
+
+## File Watching
+
+### `watch`
+
+Watches a directory or file for changes.
+
+```ts
+watch: (path: string) => Stream.Stream<WatchEvent, PlatformError>
+```
+
+Watch events include:
+- `Create`: New file/directory created
+- `Update`: File/directory modified
+- `Remove`: File/directory deleted
+
+**Example:**
+```ts
+import { Console, Effect, FileSystem, Stream } from "effect"
+
+const program = Effect.gen(function*() {
+  const fs = yield* FileSystem.FileSystem
+  
+  const watcher = fs.watch("./watched-dir")
+  
+  yield* Stream.runForEach(watcher, (event) =>
+    Console.log(`Event: ${event._tag} - ${event.path}`)
+  )
+})
+```
+
+## Size Utilities
+
+The module provides convenient helpers for working with file sizes:
+
+### Size Constructors
+
+- `Size(bytes)`: Creates a Size from number or bigint
+- `KiB(n)`: Kibibytes (1024 bytes)
+- `MiB(n)`: Mebibytes (1024² bytes)
+- `GiB(n)`: Gibibytes (1024³ bytes)
+- `TiB(n)`: Tebibytes (1024⁴ bytes)
+- `PiB(n)`: Pebibytes (1024⁵ bytes)
+
+**Example:**
+```ts
+import { Effect, FileSystem } from "effect"
+
+const program = Effect.gen(function*() {
+  const fs = yield* FileSystem.FileSystem
+  
+  // Truncate file to 100 MiB
+  yield* fs.truncate("./data.bin", FileSystem.MiB(100))
+  
+  // Stream with 64 KiB chunks
+  const stream = fs.stream("./file.txt", {
+    chunkSize: FileSystem.KiB(64)
+  })
+})
+```
+
+## Low-Level File Handles
+
+For fine-grained control, you can work with file handles directly:
+
+### `open`
+
+Opens a file and returns a handle that's automatically closed when the scope exits.
+
+```ts
+open: (
+  path: string,
+  options?: {
+    readonly flag?: OpenFlag | undefined
+    readonly mode?: number | undefined
+  }
+) => Effect.Effect<File, PlatformError, Scope>
+```
+
+**Example:**
+```ts
+import { Console, Effect, FileSystem } from "effect"
+
+const program = Effect.scoped(
+  Effect.gen(function*() {
+    const fs = yield* FileSystem.FileSystem
+    
+    const file = yield* fs.open("./data.txt", { flag: "r+" })
+    
+    // Get file info
+    const stats = yield* file.stat
+    yield* Console.log(`File size: ${stats.size} bytes`)
+    
+    // Seek to position
+    yield* file.seek(10, "start")
+    
+    // Read from current position
+    const buffer = new Uint8Array(5)
+    const bytesRead = yield* file.read(buffer)
+    
+    // Write data
+    const data = new TextEncoder().encode("Hello")
+    yield* file.write(data)
+    
+    // Flush to disk
+    yield* file.sync
+    
+    // File is automatically closed when scope exits
+  })
+)
+```
+
+## Open Flags
+
+File open flags control how files are opened:
+
+- `"r"`: Read-only. File must exist.
+- `"r+"`: Read/write. File must exist.
+- `"w"`: Write-only. Truncates or creates file.
+- `"wx"`: Like 'w' but fails if file exists.
+- `"w+"`: Read/write. Truncates or creates file.
+- `"wx+"`: Like 'w+' but fails if file exists.
+- `"a"`: Write-only append. Creates if needed.
+- `"ax"`: Like 'a' but fails if file exists.
+- `"a+"`: Read/write append. Creates if needed.
+- `"ax+"`: Like 'a+' but fails if file exists.
+
+## Testing
+
+### `makeNoop`
+
+Creates a no-op FileSystem for testing.
+
+```ts
+makeNoop: (fileSystem: Partial<FileSystem>) => FileSystem
+```
+
+**Example:**
+```ts
+import { Effect, FileSystem } from "effect"
+
+const testFs = FileSystem.makeNoop({
+  readFileString: (path) => {
+    if (path === "test-config.json") {
+      return Effect.succeed('{"test": true}')
+    }
+    return Effect.fail(
+      PlatformError.systemError({
+        _tag: "NotFound",
+        module: "FileSystem",
+        method: "readFileString",
+        description: "File not found",
+        pathOrDescriptor: path
+      })
+    )
+  },
+  exists: (path) => Effect.succeed(path === "test-config.json")
+})
+
+const program = Effect.gen(function*() {
+  const content = yield* testFs.readFileString("test-config.json")
+  // Will succeed with mocked content
+})
+```
+
+## Type Reference
+
+### FileSystem
+
+```ts
+interface FileSystem {
+  readonly access: (path: string, options?) => Effect.Effect<void, PlatformError>
+  readonly copy: (from: string, to: string, options?) => Effect.Effect<void, PlatformError>
+  readonly chmod: (path: string, mode: number) => Effect.Effect<void, PlatformError>
+  readonly exists: (path: string) => Effect.Effect<boolean, PlatformError>
+  readonly makeDirectory: (path: string, options?) => Effect.Effect<void, PlatformError>
+  readonly readFile: (path: string) => Effect.Effect<Uint8Array, PlatformError>
+  readonly readFileString: (path: string, encoding?) => Effect.Effect<string, PlatformError>
+  readonly stat: (path: string) => Effect.Effect<File.Info, PlatformError>
+  readonly writeFile: (path: string, data: Uint8Array, options?) => Effect.Effect<void, PlatformError>
+  readonly writeFileString: (path: string, data: string, options?) => Effect.Effect<void, PlatformError>
+  readonly stream: (path: string, options?) => Stream.Stream<Uint8Array, PlatformError>
+  readonly sink: (path: string, options?) => Sink.Sink<void, Uint8Array, never, PlatformError>
+  readonly watch: (path: string) => Stream.Stream<WatchEvent, PlatformError>
+  // ... and more
+}
+```
+
+### File.Info
+
+```ts
+interface File.Info {
+  readonly type: "File" | "Directory" | "SymbolicLink" | "BlockDevice" | "CharacterDevice" | "FIFO" | "Socket" | "Unknown"
+  readonly mtime: Date | undefined
+  readonly atime: Date | undefined
+  readonly birthtime: Date | undefined
+  readonly dev: number
+  readonly ino: number | undefined
+  readonly mode: number
+  readonly nlink: number | undefined
+  readonly uid: number | undefined
+  readonly gid: number | undefined
+  readonly rdev: number | undefined
+  readonly size: Size
+  readonly blksize: Size | undefined
+  readonly blocks: number | undefined
+}
+```
+
+## See Also
+
+- [Stream](/api/stream) - For streaming file operations
+- [Effect](/api/effect) - Core Effect type and operations
+- [Layer](/api/layer) - For providing FileSystem implementations

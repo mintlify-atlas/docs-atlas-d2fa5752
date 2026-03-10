@@ -1,0 +1,234 @@
+---
+title: AI & LLM Overview
+description: Build type-safe AI applications with Effect's unified language model interface
+---
+
+Effect provides a comprehensive, provider-agnostic framework for building AI applications with large language models (LLMs). The AI modules in `effect/unstable/ai` offer a unified interface that works across multiple providers while maintaining full type safety and Effect's composable architecture.
+
+## Core Modules
+
+The Effect AI framework consists of several key modules:
+
+- **LanguageModel** - Unified interface for text generation, structured output, and streaming
+- **Chat** - Stateful conversation sessions with automatic history management
+- **Tool** - Define tools that AI models can call to extend their capabilities
+- **Toolkit** - Group tools together and implement handlers
+- **Prompt** - Build and combine prompts with rich content types
+- **Response** - Type-safe response parsing with text, tool calls, and metadata
+
+## Supported Providers
+
+Effect AI currently supports the following providers through dedicated packages:
+
+- **OpenAI** - `@effect/ai-openai` - GPT models, code interpreter, file search, web search
+- **Anthropic** - `@effect/ai-anthropic` - Claude models, computer use, bash execution
+- **OpenAI-compatible** - `@effect/ai-openai-compat` - Any OpenAI-compatible API
+- **OpenRouter** - `@effect/ai-openrouter` - Access to multiple models through OpenRouter
+
+## Why Effect AI?
+
+### Provider-Agnostic Interface
+
+Write your AI logic once and switch providers without changing your code:
+
+```ts
+import { Effect, Layer } from "effect"
+import { LanguageModel } from "effect/unstable/ai"
+import { OpenAiLanguageModel } from "@effect/ai-openai"
+import { AnthropicLanguageModel } from "@effect/ai-anthropic"
+
+// Your AI logic is decoupled from the provider
+const generateSummary = (text: string) =>
+  LanguageModel.generateText({
+    prompt: `Summarize this text: ${text}`
+  })
+
+// Switch providers by changing the layer
+const withOpenAI = generateSummary("...").pipe(
+  Effect.provide(OpenAiLanguageModel.model("gpt-4"))
+)
+
+const withClaude = generateSummary("...").pipe(
+  Effect.provide(AnthropicLanguageModel.model("claude-3-5-sonnet"))
+)
+```
+
+### Type-Safe Tools and Structured Output
+
+Define tools with schemas and get automatic validation:
+
+```ts
+import { Schema } from "effect"
+import { Tool } from "effect/unstable/ai"
+
+const GetWeather = Tool.make("GetWeather", {
+  description: "Get current weather for a location",
+  parameters: Schema.Struct({
+    location: Schema.String,
+    units: Schema.Literals("celsius", "fahrenheit")
+  }),
+  success: Schema.Struct({
+    temperature: Schema.Number,
+    condition: Schema.String,
+    humidity: Schema.Number
+  })
+})
+```
+
+### Effect Integration
+
+Leverage Effect's full ecosystem:
+
+- **Error handling** - Semantic errors with retry logic
+- **Telemetry** - OpenTelemetry integration out of the box
+- **Streaming** - First-class streaming support with `Stream`
+- **Concurrency** - Control tool call execution with `concurrency` options
+- **Resource management** - Automatic cleanup with `Scope`
+
+### Fallback Strategies
+
+Build resilient AI applications with `ExecutionPlan`:
+
+```ts
+import { ExecutionPlan } from "effect"
+import { OpenAiLanguageModel } from "@effect/ai-openai"
+import { AnthropicLanguageModel } from "@effect/ai-anthropic"
+
+const plan = ExecutionPlan.make(
+  {
+    provide: OpenAiLanguageModel.model("gpt-4-mini"),
+    attempts: 3
+  },
+  {
+    provide: AnthropicLanguageModel.model("claude-3-5-sonnet"),
+    attempts: 2
+  }
+)
+
+const resilientGeneration = LanguageModel.generateText({
+  prompt: "Write a haiku about programming"
+}).pipe(
+  Effect.withExecutionPlan(plan)
+)
+```
+
+## Basic Example
+
+Here's a complete example showing text generation, structured output, and tool calling:
+
+```ts
+import { Effect, Schema, Layer, Config } from "effect"
+import { LanguageModel, Tool, Toolkit } from "effect/unstable/ai"
+import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai"
+import { FetchHttpClient } from "effect/unstable/http"
+
+// Setup OpenAI client
+const OpenAiClientLayer = OpenAiClient.layerConfig({
+  apiKey: Config.redacted("OPENAI_API_KEY")
+}).pipe(Layer.provide(FetchHttpClient.layer))
+
+// Define a tool
+const Calculator = Tool.make("Calculator", {
+  description: "Perform arithmetic operations",
+  parameters: Schema.Struct({
+    operation: Schema.Literals("add", "subtract", "multiply", "divide"),
+    a: Schema.Number,
+    b: Schema.Number
+  }),
+  success: Schema.Number
+})
+
+// Create toolkit with handlers
+const toolkit = Toolkit.make(Calculator)
+const toolkitLayer = toolkit.toLayer(
+  Effect.succeed(
+    toolkit.of({
+      Calculator: ({ operation, a, b }) => {
+        switch (operation) {
+          case "add": return Effect.succeed(a + b)
+          case "subtract": return Effect.succeed(a - b)
+          case "multiply": return Effect.succeed(a * b)
+          case "divide": return Effect.succeed(a / b)
+        }
+      }
+    })
+  )
+)
+
+// Use the language model
+const program = Effect.gen(function*() {
+  // Simple text generation
+  const textResponse = yield* LanguageModel.generateText({
+    prompt: "Explain quantum computing in one sentence"
+  })
+  console.log(textResponse.text)
+
+  // Structured output
+  const ContactSchema = Schema.Struct({
+    name: Schema.String,
+    email: Schema.String
+  })
+  const structured = yield* LanguageModel.generateObject({
+    prompt: "Extract: John Doe, john@example.com",
+    schema: ContactSchema
+  })
+  console.log(structured.value)
+
+  // Tool calling
+  const tk = yield* toolkit
+  const toolResponse = yield* LanguageModel.generateText({
+    prompt: "What is 42 multiplied by 7?",
+    toolkit: tk
+  })
+  console.log(toolResponse.text)
+  console.log("Tool calls:", toolResponse.toolCalls.length)
+})
+
+const runnable = program.pipe(
+  Effect.provide(OpenAiLanguageModel.model("gpt-4")),
+  Effect.provide(toolkitLayer),
+  Effect.provide(OpenAiClientLayer)
+)
+```
+
+## Error Handling
+
+Effect AI provides semantic error types through `AiError`:
+
+```ts
+import { Effect, Match } from "effect"
+import { AiError, LanguageModel } from "effect/unstable/ai"
+
+const handleErrors = LanguageModel.generateText({
+  prompt: "Hello!"
+}).pipe(
+  Effect.catchAll((error) =>
+    Match.type<AiError.AiError>().pipe(
+      Match.when(
+        { reason: { _tag: "RateLimitError" } },
+        (err) => Effect.logWarning(`Rate limited: ${err.reason.retryAfter}`)
+      ),
+      Match.when(
+        { reason: { _tag: "AuthenticationError" } },
+        (err) => Effect.fail(new Error("Invalid API key"))
+      ),
+      Match.when(
+        { reason: { isRetryable: true } },
+        (err) => Effect.retry(/* retry options */)
+      ),
+      Match.orElse((err) => Effect.fail(err))
+    )(error)
+  )
+)
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Language Models" icon="robot" href="/ai/language-models">
+    Learn about text generation, structured output, and streaming
+  </Card>
+  <Card title="Tools & Chat" icon="wrench" href="/ai/tools-chat">
+    Build AI agents with tools and stateful conversations
+  </Card>
+</CardGroup>

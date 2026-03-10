@@ -1,0 +1,145 @@
+---
+title: Introduction to Effect
+description: Learn about Effect, the missing standard library for TypeScript
+---
+
+Effect is a powerful library for building production-grade TypeScript applications. It provides a comprehensive toolkit for managing complexity, handling errors gracefully, and writing maintainable, type-safe code.
+
+## What is Effect?
+
+Effect is the missing standard library for TypeScript. It gives you the tools to write robust, production-ready software with:
+
+- **Type-safe error handling** - Errors are tracked in the type system, making your code more reliable
+- **Structured concurrency** - Build concurrent programs that are easier to reason about and test
+- **Dependency injection** - Use services and layers to manage dependencies cleanly
+- **Built-in observability** - Get structured logging, distributed tracing, and metrics out of the box
+- **Resource safety** - Automatically clean up resources, even when errors occur
+
+## Core Concepts
+
+### Effect Type
+
+At the heart of the library is the `Effect` type:
+
+```typescript
+Effect<Success, Error, Requirements>
+```
+
+An `Effect` represents a computation that:
+- **Succeeds** with a value of type `Success`
+- **Fails** with an error of type `Error`
+- **Requires** dependencies of type `Requirements`
+
+This three-parameter type signature makes your program's behavior explicit and verifiable at compile time.
+
+### Generator Syntax
+
+Effect uses generator functions with `Effect.gen` to provide an imperative, async/await-like coding style:
+
+```typescript
+import { Effect } from "effect"
+
+const program = Effect.gen(function*() {
+  const x = yield* Effect.succeed(10)
+  const y = yield* Effect.succeed(20)
+  return x + y
+})
+```
+
+The `yield*` operator unwraps Effect values, similar to how `await` unwraps Promises.
+
+### Services and Layers
+
+Services are Effect's approach to dependency injection. They let you define interfaces for your application's capabilities and swap implementations for different environments:
+
+<CodeGroup>
+
+```typescript Service Definition
+import { Effect, Layer, ServiceMap } from "effect"
+
+class Logger extends ServiceMap.Service<Logger, {
+  log(message: string): Effect.Effect<void>
+}>()("app/Logger") {
+  static readonly layer = Layer.effect(
+    Logger,
+    Effect.gen(function*() {
+      return Logger.of({
+        log: (message) => Effect.sync(() => console.log(message))
+      })
+    })
+  )
+}
+```
+
+```typescript Using the Service
+import { Effect } from "effect"
+
+const program = Effect.gen(function*() {
+  const logger = yield* Logger
+  yield* logger.log("Hello, Effect!")
+})
+
+// Provide the implementation
+const runnable = program.pipe(Effect.provide(Logger.layer))
+```
+
+</CodeGroup>
+
+### Error Handling
+
+Errors in Effect are typed and explicit. Define custom error types and handle them with precision:
+
+```typescript
+import { Effect, Schema } from "effect"
+
+class NetworkError extends Schema.TaggedErrorClass<NetworkError>()("NetworkError", {
+  message: Schema.String
+}) {}
+
+const fetchData = Effect.gen(function*() {
+  return yield* new NetworkError({ message: "Connection failed" })
+})
+
+const recovered = fetchData.pipe(
+  Effect.catchTag("NetworkError", (error) => 
+    Effect.succeed({ fallback: true })
+  )
+)
+```
+
+## Why Effect?
+
+<CardGroup cols={2}>
+  <Card title="Type Safety" icon="shield-check">
+    Catch errors at compile time instead of runtime. Effect's type system ensures your error handling is complete.
+  </Card>
+  <Card title="Composability" icon="puzzle-piece">
+    Build complex programs from simple, reusable pieces. Effects compose naturally with familiar operators.
+  </Card>
+  <Card title="Testability" icon="flask">
+    Services and layers make testing easy. Swap real implementations with mocks without changing your code.
+  </Card>
+  <Card title="Production Ready" icon="rocket">
+    Built-in observability, resource management, and concurrency primitives help you ship reliable software.
+  </Card>
+</CardGroup>
+
+## Philosophy
+
+Effect embraces functional programming principles while remaining practical and TypeScript-native:
+
+- **Explicit over implicit** - Side effects, errors, and dependencies are visible in types
+- **Composable by default** - Small functions combine into larger programs naturally
+- **Developer experience matters** - Generator syntax keeps code readable and familiar
+- **Production first** - Built for real applications with observability and resource management
+
+## What's Next?
+
+<CardGroup cols={2}>
+  <Card title="Installation" icon="download" href="/installation">
+    Install Effect and set up your first project
+  </Card>
+  <Card title="Quick Start" icon="bolt" href="/quickstart">
+    Build your first Effect program in minutes
+  </Card>
+</CardGroup>

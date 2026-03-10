@@ -1,0 +1,560 @@
+---
+title: Schema
+description: Runtime type validation and transformation with compile-time type inference
+---
+
+# Schema
+
+The Schema module provides a powerful way to define schemas that validate, parse, and transform data with compile-time type inference. Schemas bridge the gap between runtime and compile-time type safety.
+
+## Core Concepts
+
+A schema describes:
+- The **Type** (`T`) - the validated/decoded output type
+- The **Encoded** form (`E`) - the input/encoded representation
+- **Decoding** - transformation from encoded to type
+- **Encoding** - transformation from type back to encoded
+- **Services** - dependencies required for validation
+
+## Type Signatures
+
+### Schema
+
+```typescript
+interface Schema<out T> extends Top {
+  readonly Type: T
+}
+```
+
+<ParamField path="T" type="type parameter">
+  The decoded/output type of the schema
+</ParamField>
+
+### Codec
+
+```typescript
+interface Codec<out T, out E = T, out RD = never, out RE = never> extends Schema<T> {
+  readonly Encoded: E
+  readonly DecodingServices: RD
+  readonly EncodingServices: RE
+}
+```
+
+<ParamField path="T" type="type parameter">
+  The decoded type (output)
+</ParamField>
+
+<ParamField path="E" type="type parameter" default="T">
+  The encoded type (input)
+</ParamField>
+
+<ParamField path="RD" type="type parameter" default="never">
+  Services required for decoding
+</ParamField>
+
+<ParamField path="RE" type="type parameter" default="never">
+  Services required for encoding
+</ParamField>
+
+## Primitive Schemas
+
+### String
+
+A schema for string values.
+
+```typescript
+import { Schema } from "effect"
+
+const Name = Schema.String
+// Schema<string>
+```
+
+**Signature:**
+```typescript
+const String: Schema<string>
+```
+
+### Number
+
+A schema for number values.
+
+```typescript
+const Age = Schema.Number
+// Schema<number>
+```
+
+**Signature:**
+```typescript
+const Number: Schema<number>
+```
+
+### Boolean
+
+A schema for boolean values.
+
+```typescript
+const IsActive = Schema.Boolean
+// Schema<boolean>
+```
+
+**Signature:**
+```typescript
+const Boolean: Schema<boolean>
+```
+
+## Composite Schemas
+
+### Struct
+
+Defines an object schema with typed fields.
+
+```typescript
+const User = Schema.Struct({
+  id: Schema.Number,
+  name: Schema.String,
+  email: Schema.String
+})
+// Schema<{ id: number; name: string; email: string }>
+```
+
+**Signature:**
+```typescript
+function Struct<Fields extends Record<PropertyKey, Top>>(
+  fields: Fields
+): Codec</* inferred type */, /* inferred encoded */>
+```
+
+<ParamField path="fields" type="Record<PropertyKey, Top>" required>
+  Object mapping field names to their schemas
+</ParamField>
+
+<ResponseField name="returns" type="Codec">
+  A schema for objects with the specified fields
+</ResponseField>
+
+### Array
+
+Defines an array schema.
+
+```typescript
+const Numbers = Schema.Array(Schema.Number)
+// Schema<Array<number>>
+```
+
+**Signature:**
+```typescript
+function Array<I, A>(
+  item: Schema<A, I>
+): Schema<Array<A>, Array<I>>
+```
+
+<ParamField path="item" type="Schema<A, I>" required>
+  Schema for array elements
+</ParamField>
+
+### Record
+
+Defines a record/dictionary schema.
+
+```typescript
+const StringToNumber = Schema.Record(
+  Schema.String,
+  Schema.Number
+)
+// Schema<Record<string, number>>
+```
+
+**Signature:**
+```typescript
+function Record<K, V>(
+  key: Schema<K>,
+  value: Schema<V>
+): Schema<Record<K, V>>
+```
+
+### Union
+
+Defines a union of schemas.
+
+```typescript
+const StringOrNumber = Schema.Union(
+  Schema.String,
+  Schema.Number
+)
+// Schema<string | number>
+```
+
+**Signature:**
+```typescript
+function Union<Members extends ReadonlyArray<Top>>(
+  ...members: Members
+): Codec</* union of types */, /* union of encoded */>
+```
+
+### Tuple
+
+Defines a tuple schema with fixed positions.
+
+```typescript
+const Coordinate = Schema.Tuple(
+  Schema.Number,
+  Schema.Number
+)
+// Schema<[number, number]>
+```
+
+**Signature:**
+```typescript
+function Tuple<Elements extends ReadonlyArray<Top>>(
+  ...elements: Elements
+): Codec</* tuple type */, /* tuple encoded */>
+```
+
+## Refinements
+
+### filter
+
+Adds a validation constraint to a schema.
+
+```typescript
+const PositiveNumber = Schema.Number.pipe(
+  Schema.filter((n) => n > 0, {
+    message: () => "Must be positive"
+  })
+)
+```
+
+**Signature:**
+```typescript
+function filter<S extends Top>(
+  predicate: Predicate<Schema.Type<S>>,
+  options?: {
+    message?: (value: Schema.Type<S>) => string
+  }
+): (self: S) => S
+```
+
+### brand
+
+Creates a branded type for nominal typing.
+
+```typescript
+const UserId = Schema.Number.pipe(
+  Schema.brand("UserId")
+)
+// Schema<number & Brand<"UserId">>
+```
+
+**Signature:**
+```typescript
+function brand<B extends string | symbol>(
+  brand: B
+): <S extends Top>(self: S) => /* branded schema */
+```
+
+## Transformations
+
+### transform
+
+Transforms between encoded and decoded representations.
+
+```typescript
+const DateFromString = Schema.transform(
+  Schema.String,
+  Schema.Date,
+  {
+    decode: (s) => new Date(s),
+    encode: (d) => d.toISOString()
+  }
+)
+```
+
+**Signature:**
+```typescript
+function transform<From extends Top, To extends Top>(
+  from: From,
+  to: To,
+  options: {
+    decode: (encoded: Schema.Type<From>) => Schema.Type<To>
+    encode: (type: Schema.Type<To>) => Schema.Type<From>
+  }
+): Codec<Schema.Type<To>, Schema.Type<From>>
+```
+
+<ParamField path="from" type="Schema" required>
+  The source schema (encoded form)
+</ParamField>
+
+<ParamField path="to" type="Schema" required>
+  The target schema (decoded form)
+</ParamField>
+
+<ParamField path="options.decode" type="function" required>
+  Function to transform from encoded to decoded
+</ParamField>
+
+<ParamField path="options.encode" type="function" required>
+  Function to transform from decoded to encoded
+</ParamField>
+
+## Parsing and Validation
+
+### decode
+
+Decodes/validates input according to a schema.
+
+```typescript
+import { Effect, Schema } from "effect"
+
+const User = Schema.Struct({
+  name: Schema.String,
+  age: Schema.Number
+})
+
+const program = Effect.gen(function*() {
+  const result = yield* Schema.decode(User)({
+    name: "Alice",
+    age: 30
+  })
+  console.log(result) // { name: "Alice", age: 30 }
+})
+```
+
+**Signature:**
+```typescript
+function decode<I, A>(
+  schema: Schema<A, I>
+): (input: I, options?: ParseOptions) => Effect.Effect<A, SchemaError>
+```
+
+<ParamField path="schema" type="Schema<A, I>" required>
+  The schema to decode with
+</ParamField>
+
+<ParamField path="input" type="I" required>
+  The input value to decode
+</ParamField>
+
+<ParamField path="options" type="ParseOptions">
+  Optional parsing configuration
+</ParamField>
+
+<ResponseField name="returns" type="Effect<A, SchemaError>">
+  An effect that produces the decoded value or fails with SchemaError
+</ResponseField>
+
+### encode
+
+Encodes a value back to its encoded representation.
+
+```typescript
+const encoded = yield* Schema.encode(DateFromString)(
+  new Date("2024-01-01")
+)
+// "2024-01-01T00:00:00.000Z"
+```
+
+**Signature:**
+```typescript
+function encode<I, A>(
+  schema: Schema<A, I>
+): (value: A, options?: ParseOptions) => Effect.Effect<I, SchemaError>
+```
+
+### decodeSync
+
+Synchronously decodes a value, throwing on error.
+
+```typescript
+const user = Schema.decodeSync(User)({
+  name: "Bob",
+  age: 25
+})
+```
+
+**Signature:**
+```typescript
+function decodeSync<I, A>(
+  schema: Schema<A, I>
+): (input: I, options?: ParseOptions) => A
+```
+
+<Warning>
+  `decodeSync` throws if validation fails or if the schema requires async operations.
+</Warning>
+
+## Annotations
+
+### annotate
+
+Adds metadata annotations to a schema.
+
+```typescript
+const Email = Schema.String.pipe(
+  Schema.annotate({
+    title: "Email Address",
+    description: "A valid email address",
+    examples: ["user@example.com"]
+  })
+)
+```
+
+**Signature:**
+```typescript
+function annotate<S extends Top>(
+  annotations: Annotations
+): (self: S) => S
+```
+
+<ParamField path="annotations" type="Annotations" required>
+  Metadata to attach to the schema (title, description, examples, etc.)
+</ParamField>
+
+## Built-in Refinements
+
+### NonEmpty
+
+A string that must not be empty.
+
+```typescript
+const NonEmptyString = Schema.NonEmpty
+// Schema<string> (validated non-empty)
+```
+
+### Positive
+
+A number that must be positive.
+
+```typescript
+const Age = Schema.Positive
+// Schema<number> (validated > 0)
+```
+
+### Int
+
+An integer number.
+
+```typescript
+const Count = Schema.Int
+// Schema<number> (validated integer)
+```
+
+## Option and Result
+
+### Option
+
+Schema for Option values.
+
+```typescript
+const MaybeString = Schema.Option(Schema.String)
+// Schema<Option<string>>
+```
+
+**Signature:**
+```typescript
+function Option<I, A>(
+  value: Schema<A, I>
+): Schema<Option<A>, Option<I>>
+```
+
+### Result
+
+Schema for Result values.
+
+```typescript
+const StringResult = Schema.Result({
+  success: Schema.String,
+  failure: Schema.Number
+})
+// Schema<Result<string, number>>
+```
+
+**Signature:**
+```typescript
+function Result<S extends Top, F extends Top>(options: {
+  success: S
+  failure: F
+}): Schema<Result<Schema.Type<S>, Schema.Type<F>>>
+```
+
+## Type Extraction
+
+### Schema.Type
+
+Extracts the decoded type from a schema.
+
+```typescript
+const User = Schema.Struct({
+  name: Schema.String,
+  age: Schema.Number
+})
+
+type UserType = Schema.Type<typeof User>
+// { name: string; age: number }
+```
+
+### Codec.Encoded
+
+Extracts the encoded type from a codec.
+
+```typescript
+type Encoded = Schema.Codec.Encoded<typeof DateFromString>
+// string
+```
+
+## Complete Example
+
+```typescript
+import { Effect, Schema } from "effect"
+
+// Define a schema
+const User = Schema.Struct({
+  id: Schema.Number.pipe(Schema.brand("UserId")),
+  name: Schema.NonEmpty,
+  email: Schema.String.pipe(
+    Schema.filter((s) => s.includes("@"), {
+      message: () => "Must be a valid email"
+    })
+  ),
+  age: Schema.Number.pipe(
+    Schema.filter((n) => n >= 18, {
+      message: () => "Must be 18 or older"
+    })
+  ),
+  role: Schema.Union(
+    Schema.Literal("admin"),
+    Schema.Literal("user"),
+    Schema.Literal("guest")
+  )
+})
+
+// Extract the type
+type User = Schema.Type<typeof User>
+
+// Use the schema
+const program = Effect.gen(function*() {
+  // Decode/validate input
+  const user = yield* Schema.decode(User)({
+    id: 1,
+    name: "Alice",
+    email: "alice@example.com",
+    age: 30,
+    role: "admin"
+  })
+  
+  console.log(user)
+  // {
+  //   id: 1 & Brand<"UserId">,
+  //   name: "Alice",
+  //   email: "alice@example.com",
+  //   age: 30,
+  //   role: "admin"
+  // }
+  
+  return user
+})
+
+Effect.runPromise(program)
+  .then(console.log)
+  .catch(error => console.error("Validation failed:", error))
+```

@@ -1,0 +1,296 @@
+---
+title: "Child Processes"
+description: "Execute and manage child processes with type-safe streaming and error handling"
+icon: "terminal"
+---
+
+The `effect/unstable/process` module provides an Effect-native API for working with child processes. Build commands using a compositional API, then execute them with streaming output and proper resource management.
+
+## Creating commands
+
+Use `ChildProcess.make` to create command values that can be executed later.
+
+```typescript
+import { ChildProcess } from "effect/unstable/process"
+
+// Create a simple command
+const nodeVersion = ChildProcess.make("node", ["--version"])
+
+// Template syntax for convenience
+const echoCommand = ChildProcess.make`echo "hello world"`
+
+// With options
+const lsCommand = ChildProcess.make("ls", ["-la"], {
+  cwd: "/tmp",
+  env: { FORCE_COLOR: "1" },
+  extendEnv: true  // Merge with parent environment
+})
+```
+
+Commands are values that describe what to execute. They don't run until you spawn them.
+
+## Collecting output
+
+The `ChildProcessSpawner` service provides methods for executing commands with different output strategies.
+
+### Collecting as string
+
+Use `spawner.string` to collect the entire output as a string.
+
+```typescript
+import { NodeServices } from "@effect/platform-node"
+import { Effect, String } from "effect"
+import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
+
+const getNodeVersion = Effect.gen(function*() {
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+  
+  const version = yield* spawner.string(
+    ChildProcess.make("node", ["--version"])
+  ).pipe(
+    Effect.map(String.trim)
+  )
+  
+  return version
+}).pipe(Effect.provide(NodeServices.layer))
+```
+
+### Collecting as lines
+
+Use `spawner.lines` for line-oriented output.
+
+```typescript
+const getChangedFiles = Effect.gen(function*(baseRef: string) {
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+  
+  const files = yield* spawner.lines(
+    ChildProcess.make("git", ["diff", "--name-only", `${baseRef}...HEAD`])
+  )
+  
+  return files.filter((file) => file.endsWith(".ts"))
+})
+```
+
+## Streaming output
+
+For long-running processes, use `spawner.spawn` to get a handle with streaming output.
+
+```typescript
+import { NodeServices } from "@effect/platform-node"
+import { Console, Effect, Stream } from "effect"
+import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
+
+const runLintFix = Effect.gen(function*() {
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+  
+  // Spawn the process and get a handle
+  const handle = yield* spawner.spawn(
+    ChildProcess.make("pnpm", ["lint-fix"], {
+      env: { FORCE_COLOR: "1" },
+      extendEnv: true
+    })
+  )
+  
+  // Stream and process output
+  yield* handle.all.pipe(
+    Stream.decodeText(),
+    Stream.splitLines,
+    Stream.runForEach((line) => Console.log(`[lint-fix] ${line}`))
+  )
+  
+  // Check exit code
+  const exitCode = yield* handle.exitCode
+  
+  if (exitCode !== ChildProcessSpawner.ExitCode(0)) {
+    return yield* Effect.fail(new Error(`lint-fix failed with exit code ${exitCode}`))
+  }
+}).pipe(
+  // spawner.spawn requires Scope for resource management
+  Effect.scoped,
+  Effect.provide(NodeServices.layer)
+)
+```
+
+## Process handles
+
+Spawned processes provide several streams and properties:
+
+```typescript
+interface ChildProcessHandle {
+  readonly stdout: Stream.Stream<Uint8Array, PlatformError>  // Standard output
+  readonly stderr: Stream.Stream<Uint8Array, PlatformError>  // Standard error
+  readonly all: Stream.Stream<Uint8Array, PlatformError>     // Combined stdout/stderr
+  readonly exitCode: Effect.Effect<number, PlatformError>    // Exit code
+}
+```
+
+## Piping commands
+
+Compose pipelines using `ChildProcess.pipeTo` to connect commands.
+
+```typescript
+import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
+import { Effect } from "effect"
+
+// Build a pipeline: git log | head -n 5
+const recentCommits = ChildProcess.make("git", [
+  "log",
+  "--pretty=format:%s",
+  "-n",
+  "20"
+]).pipe(
+  ChildProcess.pipeTo(ChildProcess.make("head", ["-n", "5"]))
+)
+
+// Execute the pipeline
+const program = Effect.gen(function*() {
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+  const lines = yield* spawner.lines(recentCommits)
+  return lines
+})
+```
+
+Pipelines connect stdout of the first command to stdin of the second, just like shell pipes.
+
+## Building a service
+
+Wrap common process operations in a service for reuse.
+
+```typescript
+import { NodeServices } from "@effect/platform-node"
+import { Console, Effect, Layer, Schema, ServiceMap, Stream, String } from "effect"
+import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
+
+export class DevToolsError extends Schema.TaggedErrorClass<DevToolsError>()("DevToolsError", {
+  cause: Schema.Defect
+}) {}
+
+export class DevTools extends ServiceMap.Service<DevTools, {
+  readonly nodeVersion: Effect.Effect<string, DevToolsError>
+  readonly recentCommitSubjects: Effect.Effect<ReadonlyArray<string>, DevToolsError>
+  readonly runLintFix: Effect.Effect<void, DevToolsError>
+  changedTypeScriptFiles(baseRef: string): Effect.Effect<ReadonlyArray<string>, DevToolsError>
+}>()("docs/DevTools") {
+  static readonly layer = Layer.effect(
+    DevTools,
+    Effect.gen(function*() {
+      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+
+      const nodeVersion = spawner.string(
+        ChildProcess.make("node", ["--version"])
+      ).pipe(
+        Effect.map(String.trim),
+        Effect.mapError((cause) => new DevToolsError({ cause }))
+      )
+
+      const changedTypeScriptFiles = Effect.fn("DevTools.changedTypeScriptFiles")(
+        function*(baseRef: string) {
+          yield* Effect.annotateCurrentSpan({ baseRef })
+
+          const files = yield* spawner.lines(
+            ChildProcess.make("git", ["diff", "--name-only", `${baseRef}...HEAD`])
+          ).pipe(
+            Effect.mapError((cause) => new DevToolsError({ cause }))
+          )
+
+          return files.filter((file) => file.endsWith(".ts"))
+        }
+      )
+
+      const recentCommitSubjects = spawner.lines(
+        ChildProcess.make("git", ["log", "--pretty=format:%s", "-n", "20"]).pipe(
+          ChildProcess.pipeTo(ChildProcess.make("head", ["-n", "5"]))
+        )
+      ).pipe(
+        Effect.mapError((cause) => new DevToolsError({ cause }))
+      )
+
+      const runLintFix = Effect.gen(function*() {
+        const handle = yield* spawner.spawn(
+          ChildProcess.make("pnpm", ["lint-fix"], {
+            env: { FORCE_COLOR: "1" },
+            extendEnv: true
+          })
+        ).pipe(
+          Effect.mapError((cause) => new DevToolsError({ cause }))
+        )
+
+        yield* handle.all.pipe(
+          Stream.decodeText(),
+          Stream.splitLines,
+          Stream.runForEach((line) => Console.log(`[lint-fix] ${line}`)),
+          Effect.mapError((cause) => new DevToolsError({ cause }))
+        )
+
+        const exitCode = yield* handle.exitCode.pipe(
+          Effect.mapError((cause) => new DevToolsError({ cause }))
+        )
+
+        if (exitCode !== ChildProcessSpawner.ExitCode(0)) {
+          return yield* new DevToolsError({
+            cause: new Error(`pnpm lint-fix failed with exit code ${exitCode}`)
+          })
+        }
+      }).pipe(Effect.scoped)
+
+      return DevTools.of({
+        nodeVersion,
+        changedTypeScriptFiles,
+        recentCommitSubjects,
+        runLintFix
+      })
+    })
+  ).pipe(Layer.provide(NodeServices.layer))
+}
+
+// Usage
+export const program = Effect.gen(function*() {
+  const tools = yield* DevTools
+  
+  const version = yield* tools.nodeVersion
+  yield* Effect.log(`node=${version}`)
+  
+  const files = yield* tools.changedTypeScriptFiles("main")
+  yield* Effect.log(`Changed TS files: ${files.length}`)
+}).pipe(Effect.provide(DevTools.layer))
+```
+
+## Key features
+
+<CardGroup cols={2}>
+  <Card title="Compositional API" icon="diagram-project">
+    Build commands as values, compose them with pipes, then execute when ready.
+  </Card>
+  
+  <Card title="Streaming output" icon="water">
+    Process output as it arrives using Effect's Stream API for long-running commands.
+  </Card>
+  
+  <Card title="Resource safety" icon="shield">
+    Automatic cleanup of process resources using Effect's Scope.
+  </Card>
+  
+  <Card title="Type-safe errors" icon="triangle-exclamation">
+    All errors are typed as `PlatformError` with full stack traces.
+  </Card>
+</CardGroup>
+
+## Platform requirements
+
+The process module requires a platform-specific `ChildProcessSpawner` implementation. Use `NodeServices.layer` for Node.js:
+
+```typescript
+import { NodeServices } from "@effect/platform-node"
+
+program.pipe(
+  Effect.provide(NodeServices.layer)
+)
+```
+
+<Note>
+The process module is in the `unstable` namespace. The API may change in future versions.
+</Note>
+
+<Tip>
+Use `Effect.scoped` when working with `spawner.spawn` to ensure proper cleanup of process resources.
+</Tip>

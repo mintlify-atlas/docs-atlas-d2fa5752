@@ -1,0 +1,393 @@
+---
+title: "SQL"
+description: "Build type-safe SQL queries with connection management and transactions"
+---
+
+Effect provides a powerful SQL module for building type-safe database queries with automatic connection pooling, transaction management, and streaming support.
+
+## Overview
+
+The SQL module is located at `effect/unstable/sql` and provides:
+
+- **Type-safe query building** with tagged template literals
+- **Connection management** with automatic pooling
+- **Transaction support** with nested savepoints
+- **Streaming results** for large datasets
+- **Schema integration** for automatic validation
+
+## Basic Usage
+
+### Creating a SQL Client
+
+The `SqlClient` is the main entry point for executing queries:
+
+```typescript
+import { Effect } from "effect"
+import * as Sql from "effect/unstable/sql"
+
+const program = Effect.gen(function* () {
+  const sql = yield* Sql.SqlClient.SqlClient
+  
+  // Execute a simple query
+  const users = yield* sql`SELECT * FROM users WHERE active = ${true}`
+  
+  return users
+})
+```
+
+### Query Building
+
+Use tagged template literals to build parameterized queries:
+
+```typescript
+import { Effect } from "effect"
+import * as Sql from "effect/unstable/sql"
+
+const getUserById = (id: number) =>
+  Effect.gen(function* () {
+    const sql = yield* Sql.SqlClient.SqlClient
+    
+    // Parameters are automatically escaped
+    const users = yield* sql<{ id: number; name: string; email: string }>(
+      `SELECT id, name, email FROM users WHERE id = ${id}`
+    )
+    
+    return users[0]
+  })
+```
+
+<Note>
+Parameters in template literals are automatically parameterized to prevent SQL injection attacks.
+</Note>
+
+### Array and Object Helpers
+
+The SQL module provides helpers for common patterns:
+
+```typescript
+import { Effect } from "effect"
+import * as Sql from "effect/unstable/sql"
+
+const insertUsers = (users: Array<{ name: string; email: string }>) =>
+  Effect.gen(function* () {
+    const sql = yield* Sql.SqlClient.SqlClient
+    
+    // Insert multiple records
+    const result = yield* sql`
+      INSERT INTO users ${sql.insert(users)}
+      RETURNING *
+    `
+    
+    return result
+  })
+
+const updateUser = (id: number, data: { name?: string; email?: string }) =>
+  Effect.gen(function* () {
+    const sql = yield* Sql.SqlClient.SqlClient
+    
+    // Update with partial object
+    const result = yield* sql`
+      UPDATE users
+      SET ${sql.updateSet(data, [])}
+      WHERE id = ${id}
+      RETURNING *
+    `
+    
+    return result[0]
+  })
+```
+
+## Connection Management
+
+### Reserving Connections
+
+For multiple queries that need to share a connection:
+
+```typescript
+import { Effect, Scope } from "effect"
+import * as Sql from "effect/unstable/sql"
+
+const program = Effect.gen(function* () {
+  const sql = yield* Sql.SqlClient.SqlClient
+  
+  // Reserve a connection for this scope
+  const conn = yield* sql.reserve
+  
+  // All queries use the same connection
+  const user = yield* sql`SELECT * FROM users WHERE id = ${1}`
+  const posts = yield* sql`SELECT * FROM posts WHERE user_id = ${1}`
+  
+  return { user, posts }
+}).pipe(Effect.scoped)
+```
+
+### Connection Pooling
+
+Connections are automatically pooled and reused. Configure pool settings when creating the client:
+
+```typescript
+import { Effect } from "effect"
+import * as Sql from "effect/unstable/sql"
+import * as Pool from "effect/Pool"
+
+// Configuration depends on your SQL driver
+// Example shows conceptual structure
+const makeClient = Effect.gen(function* () {
+  const pool = yield* Pool.make({
+    acquire: acquireConnection,
+    size: 10
+  })
+  
+  return yield* Sql.SqlClient.make({
+    acquirer: Pool.get(pool),
+    compiler: yourCompiler
+  })
+})
+```
+
+## Transactions
+
+### Basic Transactions
+
+Wrap effects in `withTransaction` to execute them in a transaction:
+
+```typescript
+import { Effect } from "effect"
+import * as Sql from "effect/unstable/sql"
+
+const transferFunds = (fromId: number, toId: number, amount: number) =>
+  Effect.gen(function* () {
+    const sql = yield* Sql.SqlClient.SqlClient
+    
+    // Deduct from source account
+    yield* sql`
+      UPDATE accounts
+      SET balance = balance - ${amount}
+      WHERE id = ${fromId}
+    `
+    
+    // Add to destination account
+    yield* sql`
+      UPDATE accounts
+      SET balance = balance + ${amount}
+      WHERE id = ${toId}
+    `
+  }).pipe(sql.withTransaction)
+```
+
+If any query fails, the entire transaction is rolled back automatically.
+
+### Nested Transactions
+
+The SQL module supports nested transactions using savepoints:
+
+```typescript
+import { Effect } from "effect"
+import * as Sql from "effect/unstable/sql"
+
+const program = Effect.gen(function* () {
+  const sql = yield* Sql.SqlClient.SqlClient
+  
+  // Outer transaction
+  yield* sql`INSERT INTO logs (message) VALUES ('Starting')`
+  
+  // Inner transaction (uses savepoint)
+  yield* Effect.gen(function* () {
+    yield* sql`INSERT INTO logs (message) VALUES ('Inner')`
+    // If this fails, only inner transaction rolls back
+  }).pipe(sql.withTransaction)
+  
+  yield* sql`INSERT INTO logs (message) VALUES ('Done')`
+}).pipe(sql.withTransaction)
+```
+
+<Warning>
+Nested transactions are implemented using savepoints. Not all databases support this feature.
+</Warning>
+
+## Streaming Results
+
+For large result sets, use streaming to avoid loading everything into memory:
+
+```typescript
+import { Effect, Stream } from "effect"
+import * as Sql from "effect/unstable/sql"
+
+const processLargeDataset = Effect.gen(function* () {
+  const sql = yield* Sql.SqlClient.SqlClient
+  
+  // Create a streaming query
+  const statement = sql`SELECT * FROM large_table`
+  
+  // Process results as a stream
+  yield* statement.stream.pipe(
+    Stream.tap((row) => Effect.log(`Processing: ${row.id}`)),
+    Stream.runDrain
+  )
+})
+```
+
+## Schema Integration
+
+Integrate with Effect Schema for automatic validation:
+
+```typescript
+import { Effect, Schema } from "effect"
+import * as Sql from "effect/unstable/sql"
+
+const User = Schema.Struct({
+  id: Schema.Number,
+  name: Schema.String,
+  email: Schema.String,
+  createdAt: Schema.Date
+})
+
+const getUsers = Effect.gen(function* () {
+  const sql = yield* Sql.SqlClient.SqlClient
+  
+  // Query returns validated User objects
+  const rows = yield* sql`SELECT * FROM users`
+  
+  // Validate each row
+  return yield* Effect.forEach(
+    rows,
+    (row) => Schema.decode(User)(row)
+  )
+})
+```
+
+### Schema-Based Queries
+
+Use `SqlSchema` for declarative schema-driven queries:
+
+```typescript
+import { Effect, Schema } from "effect"
+import * as Sql from "effect/unstable/sql"
+import * as SqlSchema from "effect/unstable/sql/SqlSchema"
+
+const User = Schema.Struct({
+  id: Schema.Number,
+  name: Schema.String,
+  email: Schema.String
+})
+
+const findUserById = (id: number) =>
+  Effect.gen(function* () {
+    const sql = yield* Sql.SqlClient.SqlClient
+    
+    // Automatic validation with schema
+    return yield* SqlSchema.findOne({
+      Request: Schema.Struct({ id: Schema.Number }),
+      Result: User,
+      execute: (request) => sql`
+        SELECT * FROM users WHERE id = ${request.id}
+      `
+    })({ id })
+  })
+```
+
+## Error Handling
+
+SQL operations return typed errors:
+
+```typescript
+import { Effect, Schema } from "effect"
+import * as Sql from "effect/unstable/sql"
+
+class SqlError extends Schema.TaggedErrorClass<SqlError>()("SqlError", {
+  cause: Schema.Defect,
+  message: Schema.optional(Schema.String)
+}) {}
+
+const program = Effect.gen(function* () {
+  const sql = yield* Sql.SqlClient.SqlClient
+  
+  const users = yield* sql`SELECT * FROM users`
+  
+  return users
+}).pipe(
+  Effect.catchTag("SqlError", (error) =>
+    Effect.gen(function* () {
+      yield* Effect.logError("Database error", error.message)
+      return []
+    })
+  )
+)
+```
+
+## Raw Queries
+
+For cases where you need the raw result from the database driver:
+
+```typescript
+import { Effect } from "effect"
+import * as Sql from "effect/unstable/sql"
+
+const program = Effect.gen(function* () {
+  const sql = yield* Sql.SqlClient.SqlClient
+  
+  // Get raw result without transformation
+  const statement = sql`SELECT * FROM users`
+  const rawResult = yield* statement.raw
+  
+  return rawResult
+})
+```
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Use parameterized queries">
+    Always use template literals with parameters instead of string concatenation:
+    
+    ```typescript
+    // Good
+    sql`SELECT * FROM users WHERE id = ${userId}`
+    
+    // Bad - SQL injection risk!
+    sql`SELECT * FROM users WHERE id = ${userId}`
+    ```
+  </Accordion>
+  
+  <Accordion title="Leverage transactions">
+    Use transactions for any operation that modifies multiple records:
+    
+    ```typescript
+    const operation = Effect.gen(function* () {
+      // Multiple operations here
+    }).pipe(sql.withTransaction)
+    ```
+  </Accordion>
+  
+  <Accordion title="Stream large results">
+    Use `.stream` for queries that return many rows:
+    
+    ```typescript
+    yield* statement.stream.pipe(
+      Stream.tap(processRow),
+      Stream.runDrain
+    )
+    ```
+  </Accordion>
+  
+  <Accordion title="Validate with schemas">
+    Integrate Schema validation to catch data inconsistencies early:
+    
+    ```typescript
+    const rows = yield* sql`SELECT * FROM users`
+    return yield* Effect.forEach(rows, Schema.decode(User))
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="Schema" icon="check" href="/data/schema">
+    Define and validate data structures
+  </Card>
+  
+  <Card title="Caching" icon="database" href="/data/caching">
+    Cache query results efficiently
+  </Card>
+</CardGroup>

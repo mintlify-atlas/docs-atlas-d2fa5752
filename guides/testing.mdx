@@ -1,0 +1,370 @@
+---
+title: Testing
+description: Write tests for Effect programs using @effect/vitest with it.effect, TestClock, and layer-based testing
+---
+
+Effect provides first-class testing support through `@effect/vitest`, which integrates Effect's runtime with Vitest. Write tests using familiar syntax while leveraging Effect's powerful features like dependency injection, time control, and structured concurrency.
+
+## Getting Started with @effect/vitest
+
+Install the testing package:
+
+```bash
+npm install --save-dev @effect/vitest
+```
+
+Then import the `it.effect` test helper:
+
+```typescript
+import { assert, describe, it } from "@effect/vitest"
+import { Effect } from "effect"
+
+describe("@effect/vitest basics", () => {
+  it.effect("runs Effect code with assert helpers", () =>
+    Effect.gen(function*() {
+      const upper = ["ada", "lin"].map((name) => name.toUpperCase())
+      assert.deepStrictEqual(upper, ["ADA", "LIN"])
+      assert.strictEqual(upper.length, 2)
+      assert.isTrue(upper.includes("ADA"))
+    }))
+})
+```
+
+## Basic Testing Patterns
+
+### Using it.effect
+
+The `it.effect` function runs Effect code in your tests. It automatically handles the Effect runtime and provides built-in assertions:
+
+```typescript
+import { assert, describe, it } from "@effect/vitest"
+import { Effect } from "effect"
+
+it.effect("tests effectful computation", () =>
+  Effect.gen(function*() {
+    const result = yield* Effect.succeed(42)
+    assert.strictEqual(result, 42)
+  }))
+```
+
+### Parameterized Tests
+
+Use `it.effect.each` for parameterized tests:
+
+```typescript
+it.effect.each([
+  { input: " Ada ", expected: "ada" },
+  { input: " Lin ", expected: "lin" },
+  { input: " Nia ", expected: "nia" }
+])("parameterized normalization %#", ({ input, expected }) =>
+  Effect.gen(function*() {
+    assert.strictEqual(input.trim().toLowerCase(), expected)
+  }))
+```
+
+### Property-Based Testing
+
+Use `it.effect.prop` with Schema-based arbitraries for property-based testing:
+
+```typescript
+import { Schema } from "effect"
+
+it.effect.prop("reversing twice is identity", [Schema.String], ([value]) =>
+  Effect.gen(function*() {
+    const reversedTwice = value.split("").reverse().reverse().join("")
+    assert.strictEqual(reversedTwice, value)
+  }))
+```
+
+## Controlling Time with TestClock
+
+`TestClock` allows you to control virtual time in tests, making it easy to test time-dependent code without waiting:
+
+```typescript
+import { assert, it } from "@effect/vitest"
+import { Effect, Fiber } from "effect"
+import { TestClock } from "effect/testing"
+
+it.effect("controls time with TestClock", () =>
+  Effect.gen(function*() {
+    const fiber = yield* Effect.forkChild(
+      Effect.sleep(60_000).pipe(Effect.as("done" as const))
+    )
+    
+    // Move virtual time forward to complete sleeping fibers immediately.
+    yield* TestClock.adjust(60_000)
+    
+    const value = yield* Fiber.join(fiber)
+    assert.strictEqual(value, "done")
+  }))
+```
+
+### Testing with Real Time
+
+When you need to test with real runtime services (actual time, random, etc.), use `it.live`:
+
+```typescript
+it.live("uses real runtime services", () =>
+  Effect.gen(function*() {
+    const startedAt = Date.now()
+    yield* Effect.sleep(1)
+    assert.isTrue(Date.now() >= startedAt)
+  }))
+```
+
+## Testing Services with Layers
+
+Effect's layer system makes it easy to test services with mock dependencies.
+
+### Creating Test Layers
+
+Define test-specific layers that provide mock implementations:
+
+```typescript
+import { assert, describe, it, layer } from "@effect/vitest"
+import { Array, Effect, Layer, Ref, ServiceMap } from "effect"
+
+export interface Todo {
+  readonly id: number
+  readonly title: string
+}
+
+// Create a test ref service that can be used to store test data
+export class TodoRepoTestRef
+  extends ServiceMap.Service<TodoRepoTestRef, Ref.Ref<Array<Todo>>>()("app/TodoRepoTestRef")
+{
+  static readonly layer = Layer.effect(TodoRepoTestRef, Ref.make(Array.empty()))
+}
+
+class TodoRepo extends ServiceMap.Service<TodoRepo, {
+  create(title: string): Effect.Effect<Todo>
+  readonly list: Effect.Effect<ReadonlyArray<Todo>>
+}>()("app/TodoRepo") {
+  static readonly layerTest = Layer.effect(
+    TodoRepo,
+    Effect.gen(function*() {
+      const store = yield* TodoRepoTestRef
+      
+      const create = Effect.fn("TodoRepo.create")(function*(title: string) {
+        const todos = yield* Ref.get(store)
+        const todo = { id: todos.length + 1, title }
+        yield* Ref.set(store, [...todos, todo])
+        return todo
+      })
+      
+      const list = Ref.get(store)
+      
+      return TodoRepo.of({
+        create,
+        list
+      })
+    })
+  ).pipe(
+    // Provide the test ref layer as a dependency
+    Layer.provideMerge(TodoRepoTestRef.layer)
+  )
+}
+```
+
+### Shared Layers Across Tests
+
+Use the `layer()` helper to create one shared layer for all tests in a block:
+
+```typescript
+// layer(...) creates one shared layer for the block and tears it down in
+// afterAll, so all tests inside can access the same service context.
+layer(TodoRepo.layerTest)("TodoRepo", (it) => {
+  it.effect("tests repository behavior", () =>
+    Effect.gen(function*() {
+      const repo = yield* TodoRepo
+      const before = (yield* repo.list).length
+      assert.strictEqual(before, 0)
+      
+      yield* repo.create("Write docs")
+      
+      const after = (yield* repo.list).length
+      assert.strictEqual(after, 1)
+    }))
+  
+  it.effect("layer is shared", () =>
+    Effect.gen(function*() {
+      const repo = yield* TodoRepo
+      const before = (yield* repo.list).length
+      // State from previous test persists because layer is shared
+      assert.strictEqual(before, 1)
+      
+      yield* repo.create("Write docs again")
+      
+      const after = (yield* repo.list).length
+      assert.strictEqual(after, 2)
+    }))
+})
+```
+
+### Testing Composed Services
+
+Test higher-level services by composing their test layers:
+
+```typescript
+class TodoService extends ServiceMap.Service<TodoService, {
+  addAndCount(title: string): Effect.Effect<number>
+  readonly titles: Effect.Effect<ReadonlyArray<string>>
+}>()("app/TodoService") {
+  static readonly layerNoDeps = Layer.effect(
+    TodoService,
+    Effect.gen(function*() {
+      const repo = yield* TodoRepo
+      
+      const addAndCount = Effect.fn("TodoService.addAndCount")(function*(title: string) {
+        yield* repo.create(title)
+        const todos = yield* repo.list
+        return todos.length
+      })
+      
+      const titles = repo.list.pipe(
+        Effect.map((todos) => todos.map((todo) => todo.title))
+      )
+      
+      return TodoService.of({
+        addAndCount,
+        titles
+      })
+    })
+  )
+  
+  static readonly layerTest = this.layerNoDeps.pipe(
+    // Provide the test repo layer as a dependency
+    Layer.provideMerge(TodoRepo.layerTest)
+  )
+}
+
+describe("TodoService", () => {
+  it.effect("tests higher-level service logic", () =>
+    Effect.gen(function*() {
+      const ref = yield* TodoRepoTestRef
+      const service = yield* TodoService
+      const count = yield* service.addAndCount("Review docs")
+      const titles = yield* service.titles
+      
+      assert.isTrue(count >= 1)
+      assert.isTrue(titles.some((title) => title.includes("Review docs")))
+      
+      // You can also access the test ref directly
+      const todos = yield* Ref.get(ref)
+      assert.isTrue(todos.length >= 1)
+    }).pipe(Effect.provide(TodoService.layerTest)))
+})
+```
+
+## Testing Patterns
+
+<Tabs>
+  <Tab title="Test Isolation">
+    ```typescript
+    // Each test gets fresh layers by using Effect.provide
+    describe("isolated tests", () => {
+      it.effect("test 1", () =>
+        Effect.gen(function*() {
+          const service = yield* MyService
+          // Fresh service instance
+        }).pipe(Effect.provide(MyService.layerTest)))
+      
+      it.effect("test 2", () =>
+        Effect.gen(function*() {
+          const service = yield* MyService
+          // Another fresh service instance
+        }).pipe(Effect.provide(MyService.layerTest)))
+    })
+    ```
+  </Tab>
+  
+  <Tab title="Shared State">
+    ```typescript
+    // Use layer() for shared state across tests
+    layer(MyService.layerTest)("shared tests", (it) => {
+      it.effect("test 1", () =>
+        Effect.gen(function*() {
+          const service = yield* MyService
+          // Shared service instance
+        }))
+      
+      it.effect("test 2", () =>
+        Effect.gen(function*() {
+          const service = yield* MyService
+          // Same service instance as test 1
+        }))
+    })
+    ```
+  </Tab>
+  
+  <Tab title="Mock Dependencies">
+    ```typescript
+    // Create test-specific implementations
+    class ApiClientTest extends ServiceMap.Service<ApiClient, ApiService>()("ApiClient") {
+      static readonly layer = Layer.succeed(
+        ApiClient,
+        ApiClient.of({
+          fetch: Effect.fn("ApiClient.fetch")(function*(url: string) {
+            // Return mock data instead of making real requests
+            return { status: 200, body: "mock response" }
+          })
+        })
+      )
+    }
+    
+    it.effect("uses mock API client", () =>
+      Effect.gen(function*() {
+        const client = yield* ApiClient
+        const response = yield* client.fetch("/users")
+        assert.strictEqual(response.status, 200)
+      }).pipe(Effect.provide(ApiClientTest.layer)))
+    ```
+  </Tab>
+</Tabs>
+
+## Assertion Helpers
+
+The `assert` object from `@effect/vitest` provides common assertions:
+
+```typescript
+assert.strictEqual(actual, expected)
+assert.deepStrictEqual(actual, expected)
+assert.isTrue(value)
+assert.isFalse(value)
+assert.isDefined(value)
+assert.isUndefined(value)
+assert.exists(value)
+assert.throws(() => fn())
+```
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Test Real Behavior" icon="circle-1">
+    Test services through their public interface, not implementation details. Use `layer()` for integration-style tests.
+  </Card>
+  
+  <Card title="Use TestClock" icon="circle-2">
+    Always use `TestClock` for time-dependent tests. Never use real delays in tests.
+  </Card>
+  
+  <Card title="Separate Layers" icon="circle-3">
+    Create separate `layerTest` and `layer` (production) implementations. Keep test layers simple and focused.
+  </Card>
+  
+  <Card title="Test Refs" icon="circle-4">
+    Use test ref services to expose internal state for assertions without breaking encapsulation.
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Observability" icon="chart-line" href="/guides/observability">
+    Add logging and tracing to understand test behavior
+  </Card>
+  
+  <Card title="Error Handling" icon="triangle-exclamation" href="/guides/error-handling">
+    Learn how to test error cases and recovery
+  </Card>
+</CardGroup>

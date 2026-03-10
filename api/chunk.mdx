@@ -1,0 +1,353 @@
+---
+title: Chunk
+---
+
+The `Chunk` module provides an immutable, high-performance sequence data structure optimized for functional programming patterns. A `Chunk` is a persistent data structure that supports efficient append, prepend, and concatenation operations.
+
+## Mental Model
+
+- **Immutable**: All operations return new chunks without modifying the original
+- **O(1) append/prepend**: Adding elements is constant time (amortized)
+- **O(log n) concatenation**: Joining chunks is logarithmic
+- **O(log n) random access**: Element lookup by index
+- **Structural sharing**: Modifications reuse unchanged parts
+- **Memory efficient**: Tree-like structure minimizes allocations
+
+## Key Operations
+
+### Create
+
+Build chunks from values:
+
+```ts
+import { Chunk } from "effect"
+
+// From elements
+const numbers = Chunk.make(1, 2, 3, 4, 5)
+
+// Single element
+const single = Chunk.of(42)
+
+// From iterable
+const fromArray = Chunk.fromIterable([1, 2, 3])
+const fromSet = Chunk.fromIterable(new Set(["a", "b", "c"]))
+
+// Empty
+const empty = Chunk.empty<number>()
+
+// Range (inclusive)
+const range = Chunk.range(1, 5) // Chunk(1, 2, 3, 4, 5)
+```
+
+### Access
+
+Safely retrieve elements:
+
+```ts
+import { Chunk, Option } from "effect"
+
+const chunk = Chunk.make(1, 2, 3, 4, 5)
+
+// Get element (safe)
+const second = Chunk.get(chunk, 1) // Option.some(2)
+const outOfBounds = Chunk.get(chunk, 10) // Option.none()
+
+// Get element (unsafe - throws if out of bounds)
+const first = Chunk.getUnsafe(chunk, 0) // 1
+
+// Head and tail
+const head = Chunk.head(chunk) // Option.some(1)
+const last = Chunk.last(chunk) // Option.some(5)
+
+// For non-empty chunks
+const firstNonEmpty = Chunk.headNonEmpty(Chunk.make(1, 2, 3)) // 1
+```
+
+### Transform
+
+Map, filter, and flatMap:
+
+```ts
+import { Chunk } from "effect"
+
+const numbers = Chunk.make(1, 2, 3, 4, 5)
+
+// Map
+const doubled = Chunk.map(numbers, (n) => n * 2)
+// Chunk(2, 4, 6, 8, 10)
+
+// Filter
+const evens = Chunk.filter(numbers, (n) => n % 2 === 0)
+// Chunk(2, 4)
+
+// FlatMap
+const duplicated = Chunk.flatMap(numbers, (n) => Chunk.make(n, n))
+// Chunk(1, 1, 2, 2, 3, 3, 4, 4, 5, 5)
+
+// Flatten
+const nested = Chunk.make(Chunk.make(1, 2), Chunk.make(3, 4))
+const flat = Chunk.flatten(nested)
+// Chunk(1, 2, 3, 4)
+```
+
+### Combine
+
+Join chunks efficiently:
+
+```ts
+import { Chunk } from "effect"
+
+const a = Chunk.make(1, 2, 3)
+const b = Chunk.make(4, 5, 6)
+
+// Concatenate (O(log n))
+const combined = Chunk.appendAll(a, b)
+// Chunk(1, 2, 3, 4, 5, 6)
+
+// Prepend single element (O(1))
+const withZero = Chunk.prepend(a, 0)
+// Chunk(0, 1, 2, 3)
+
+// Append single element (O(1))
+const withSeven = Chunk.append(a, 7)
+// Chunk(1, 2, 3, 7)
+
+// Prepend all
+const prefixed = Chunk.prependAll(a, Chunk.make(-1, 0))
+// Chunk(-1, 0, 1, 2, 3)
+```
+
+### Split
+
+Divide chunks:
+
+```ts
+import { Chunk } from "effect"
+
+const numbers = Chunk.make(1, 2, 3, 4, 5, 6)
+
+// Take/drop
+const first3 = Chunk.take(numbers, 3) // Chunk(1, 2, 3)
+const rest = Chunk.drop(numbers, 3) // Chunk(4, 5, 6)
+
+// Take/drop from right
+const last2 = Chunk.takeRight(numbers, 2) // Chunk(5, 6)
+const allButLast2 = Chunk.dropRight(numbers, 2) // Chunk(1, 2, 3, 4)
+
+// While predicate
+const prefix = Chunk.takeWhile(numbers, (n) => n < 4) // Chunk(1, 2, 3)
+const suffix = Chunk.dropWhile(numbers, (n) => n < 4) // Chunk(4, 5, 6)
+
+// Group into chunks
+const groups = Chunk.chunksOf(numbers, 2)
+// Chunk(Chunk(1, 2), Chunk(3, 4), Chunk(5, 6))
+```
+
+### Filter
+
+Select and transform:
+
+```ts
+import { Chunk, Result } from "effect"
+
+const chunk = Chunk.make("1", "2", "hello", "3")
+
+// Filter and map
+const numbers = Chunk.filterMap(chunk, (s) => {
+  const num = parseInt(s)
+  return isNaN(num) ? Result.failVoid : Result.succeed(num)
+})
+// Chunk(1, 2, 3)
+
+// Filter while (stops at first failure)
+const whileNumbers = Chunk.filterMapWhile(chunk, (s) => {
+  const num = parseInt(s)
+  return isNaN(num) ? Result.failVoid : Result.succeed(num)
+})
+// Chunk(1, 2) (stops at "hello")
+
+// Remove None values
+const opts = Chunk.make(Option.some(1), Option.none(), Option.some(3))
+const compacted = Chunk.compact(opts) // Chunk(1, 3)
+```
+
+### Fold
+
+Reduce to a single value:
+
+```ts
+import { Chunk } from "effect"
+
+const numbers = Chunk.make(1, 2, 3, 4, 5)
+
+// Reduce
+const sum = Chunk.reduce(numbers, 0, (acc, n) => acc + n) // 15
+
+// MapAccum (stateful map)
+const [finalState, result] = Chunk.mapAccum(
+  numbers,
+  0,
+  (state, n) => [state + n, state + n]
+)
+// finalState: 15, result: Chunk(1, 3, 6, 10, 15)
+```
+
+### Partition
+
+Split into two chunks:
+
+```ts
+import { Chunk, Result } from "effect"
+
+const numbers = Chunk.make(1, -2, 3, -4, 5)
+
+const [negatives, positives] = Chunk.partition(
+  numbers,
+  (n) => n > 0 ? Result.succeed(n) : Result.fail(n)
+)
+// negatives: Chunk(-2, -4)
+// positives: Chunk(1, 3, 5)
+
+// Separate Results
+const results = Chunk.make(
+  Result.succeed(1),
+  Result.fail("err"),
+  Result.succeed(2)
+)
+const [errors, values] = Chunk.separate(results)
+// errors: Chunk("err")
+// values: Chunk(1, 2)
+```
+
+### Sort
+
+Order elements:
+
+```ts
+import { Chunk, Order } from "effect"
+
+const numbers = Chunk.make(3, 1, 4, 1, 5, 9)
+const sorted = Chunk.sort(numbers, Order.Number)
+// Chunk(1, 1, 3, 4, 5, 9)
+
+// Sort by projection
+interface Person { name: string; age: number }
+const people: Chunk<Person> = ...
+const byAge = Chunk.sortWith(people, (p) => p.age, Order.Number)
+```
+
+### Set Operations
+
+Treat chunks as sets:
+
+```ts
+import { Chunk } from "effect"
+
+const a = Chunk.make(1, 2, 3, 4)
+const b = Chunk.make(3, 4, 5, 6)
+
+// Intersection
+const common = Chunk.intersection(a, b) // Chunk(3, 4)
+```
+
+### Convert
+
+To/from arrays:
+
+```ts
+import { Chunk } from "effect"
+
+const chunk = Chunk.make(1, 2, 3)
+
+// To array (mutable copy)
+const array = Chunk.toArray(chunk) // [1, 2, 3]
+
+// To readonly array (may share structure)
+const readonly = Chunk.toReadonlyArray(chunk) // readonly [1, 2, 3]
+
+// From array (unsafe - shares reference)
+const unsafeChunk = Chunk.fromArrayUnsafe([1, 2, 3])
+```
+
+### Check
+
+Test properties:
+
+```ts
+import { Chunk } from "effect"
+
+const chunk = Chunk.make(1, 2, 3)
+
+// Size
+const size = Chunk.size(chunk) // 3
+
+// Empty checks
+const empty = Chunk.isEmpty(Chunk.empty()) // true
+const nonEmpty = Chunk.isNonEmpty(chunk) // true
+
+// Type guard
+const value = Chunk.make(1, 2, 3)
+if (Chunk.isChunk(value)) {
+  // value is Chunk<number>
+}
+```
+
+## Type Signatures
+
+```ts
+// Core types
+interface Chunk<A> extends Iterable<A> {}
+interface NonEmptyChunk<A> extends Chunk<A> {}
+
+// Creation
+const make: <As extends readonly [any, ...Array<any>]>(
+  ...as: As
+) => NonEmptyChunk<As[number]>
+const of: <A>(a: A) => NonEmptyChunk<A>
+const empty: <A = never>() => Chunk<A>
+const fromIterable: <A>(self: Iterable<A>) => Chunk<A>
+
+// Access
+const get: {
+  (index: number): <A>(self: Chunk<A>) => Option<A>
+  <A>(self: Chunk<A>, index: number): Option<A>
+}
+
+// Transform
+const map: {
+  <A, B>(f: (a: A, i: number) => B): (self: Chunk<A>) => Chunk<B>
+  <A, B>(self: Chunk<A>, f: (a: A, i: number) => B): Chunk<B>
+}
+const flatMap: {
+  <A, B>(f: (a: A, i: number) => Chunk<B>): (self: Chunk<A>) => Chunk<B>
+  <A, B>(self: Chunk<A>, f: (a: A, i: number) => Chunk<B>): Chunk<B>
+}
+
+// Combine
+const append: {
+  <A2>(a: A2): <A>(self: Chunk<A>) => NonEmptyChunk<A2 | A>
+  <A, A2>(self: Chunk<A>, a: A2): NonEmptyChunk<A | A2>
+}
+const appendAll: {
+  <A, B>(that: Chunk<B>): (self: Chunk<A>) => Chunk<A | B>
+  <A, B>(self: Chunk<A>, that: Chunk<B>): Chunk<A | B>
+}
+```
+
+## Performance Characteristics
+
+| Operation | Time Complexity |
+|-----------|----------------|
+| `append` / `prepend` | O(1) amortized |
+| `appendAll` / `prependAll` | O(log min(m,n)) |
+| `get` | O(log n) |
+| `map` / `filter` | O(n) |
+| `flatMap` | O(n·m) |
+| `take` / `drop` | O(log n) |
+| `size` | O(1) |
+
+## See Also
+
+- [Array](/api/array) — Standard array utilities
+- [List](/api/list) — Persistent linked list
+- [HashMap](/api/hashmap) — Immutable key-value map

@@ -1,0 +1,263 @@
+---
+title: Platform Bun
+description: Bun platform-specific implementations for Effect
+---
+
+The `@effect/platform-bun` package provides Bun-specific implementations of Effect's platform abstractions, enabling you to leverage Bun's high-performance runtime for building fast server-side applications.
+
+## Installation
+
+```bash
+bun add @effect/platform-bun effect
+```
+
+Requires Bun runtime.
+
+## When to Use
+
+Use `@effect/platform-bun` when:
+
+- Building server-side applications with Bun
+- You want maximum performance with Bun's optimized runtime
+- You need Bun-specific features and APIs
+- Building high-throughput HTTP servers or WebSocket applications
+- You want faster startup times and lower memory usage
+
+## Core Features
+
+### Runtime
+
+The `BunRuntime` module provides the entry point for running Effect programs in Bun:
+
+```typescript
+import { BunRuntime } from "@effect/platform-bun"
+import { Effect } from "effect"
+
+const program = Effect.gen(function* () {
+  yield* Effect.log("Hello from Bun!")
+  return "success"
+})
+
+BunRuntime.runMain(program)
+```
+
+**Features:**
+- Automatic error handling and logging
+- Signal management (handles Ctrl+C gracefully)
+- Exit code handling based on success/failure
+- Optional custom teardown logic
+- Optimized for Bun's runtime characteristics
+
+### HTTP Server
+
+Create high-performance HTTP servers with the `BunHttpServer` module:
+
+```typescript
+import { BunHttpServer, BunRuntime } from "@effect/platform-bun"
+import { Effect, Layer } from "effect"
+import { HttpRouter, HttpServerResponse } from "effect/unstable/http"
+
+const router = HttpRouter.empty.pipe(
+  HttpRouter.add(
+    "GET",
+    "/hello",
+    Effect.succeed(HttpServerResponse.text("Hello from Bun!"))
+  )
+)
+
+const server = router.pipe(
+  HttpRouter.serve,
+  Layer.provide(BunHttpServer.layer({ port: 3000 }))
+)
+
+BunRuntime.runMain(Layer.launch(server))
+```
+
+**Advantages:**
+- Built on Bun's native HTTP server (faster than Node.js)
+- Automatic HTTP/2 support
+- Native WebSocket support
+- Lower latency and higher throughput
+
+### HTTP Client
+
+Make HTTP requests using the `BunHttpClient` module:
+
+```typescript
+import { BunHttpClient, BunRuntime } from "@effect/platform-bun"
+import { Effect } from "effect"
+import { HttpClient } from "effect/unstable/http"
+
+const program = Effect.gen(function* () {
+  const client = yield* HttpClient.HttpClient
+  const response = yield* client.get("https://api.example.com/data")
+  const data = yield* response.json
+  return data
+}).pipe(Effect.provide(BunHttpClient.layer))
+
+BunRuntime.runMain(program)
+```
+
+### File System
+
+Access the file system with the `BunFileSystem` module:
+
+```typescript
+import { BunFileSystem, BunRuntime } from "@effect/platform-bun"
+import { Effect } from "effect"
+import { FileSystem } from "effect/unstable/platform"
+
+const program = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem
+  const content = yield* fs.readFileString("./data.txt")
+  yield* Effect.log(`File content: ${content}`)
+  yield* fs.writeFileString("./output.txt", "Hello!")
+}).pipe(Effect.provide(BunFileSystem.layer))
+
+BunRuntime.runMain(program)
+```
+
+Bun's file system operations are optimized and often faster than Node.js.
+
+### Child Processes
+
+Spawn and manage child processes:
+
+```typescript
+import { BunChildProcessSpawner, BunRuntime } from "@effect/platform-bun"
+import { Effect } from "effect"
+import { ChildProcessSpawner } from "effect/unstable/platform"
+
+const program = Effect.gen(function* () {
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+  const result = yield* spawner.spawn("ls", ["-la"])
+  yield* Effect.log(`Exit code: ${result.exitCode}`)
+}).pipe(Effect.provide(BunChildProcessSpawner.layer))
+
+BunRuntime.runMain(program)
+```
+
+### WebSockets
+
+Bun has first-class WebSocket support integrated into its HTTP server:
+
+```typescript
+import { BunHttpServer, BunRuntime } from "@effect/platform-bun"
+import { Effect, Stream } from "effect"
+import { Socket } from "effect/unstable/socket"
+
+const program = Socket.makeHandler((socket) =>
+  socket.run.pipe(
+    Stream.tap((message) => 
+      Effect.gen(function* () {
+        yield* Effect.log(`Received: ${message}`)
+        yield* socket.write(`Echo: ${message}`)
+      })
+    ),
+    Stream.runDrain
+  )
+).pipe(
+  Effect.flatMap((handler) =>
+    BunHttpServer.make({
+      port: 8080,
+      websocket: handler
+    })
+  ),
+  Effect.scoped
+)
+
+BunRuntime.runMain(program)
+```
+
+## Available Modules
+
+| Module | Description |
+|--------|-------------|
+| `BunRuntime` | Run Effect programs as Bun applications |
+| `BunHttpServer` | Create high-performance HTTP servers |
+| `BunHttpClient` | Make HTTP requests (Bun-native) |
+| `BunFileSystem` | File system operations |
+| `BunChildProcessSpawner` | Spawn and manage child processes |
+| `BunSocket` | Socket client |
+| `BunSocketServer` | Socket server |
+| `BunWorker` | Worker thread management |
+| `BunWorkerRunner` | Worker runner for parallel processing |
+| `BunPath` | Path manipulation |
+| `BunStdio` | Standard input/output/error streams |
+| `BunTerminal` | Terminal interaction |
+| `BunRedis` | Redis client support |
+| `BunClusterHttp` | HTTP server clustering |
+| `BunClusterSocket` | Socket server clustering |
+| `BunMultipart` | Multipart form data handling |
+| `BunStream` | Bun stream integration |
+| `BunSink` | Stream sinks for Bun |
+
+## Platform Services
+
+The `BunServices` module provides a convenient layer that includes all common Bun services:
+
+```typescript
+import { BunServices, BunRuntime } from "@effect/platform-bun"
+import { Effect } from "effect"
+import { FileSystem } from "effect/unstable/platform"
+
+const program = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem
+  // All Bun services are available
+}).pipe(Effect.provide(BunServices.layer))
+
+BunRuntime.runMain(program)
+```
+
+## Performance Benefits
+
+Bun offers several performance advantages:
+
+- **Faster Startup**: Bun starts significantly faster than Node.js
+- **Lower Memory**: Reduced memory footprint for applications
+- **HTTP Speed**: Native HTTP server is faster than Node.js http module
+- **File I/O**: Optimized file system operations
+- **Built-in APIs**: Many built-in APIs (SQLite, password hashing, etc.)
+
+## Migration from Node.js
+
+Migrating from `@effect/platform-node` to `@effect/platform-bun` is straightforward:
+
+```typescript
+// Before (Node.js)
+import { NodeRuntime, NodeHttpServer } from "@effect/platform-node"
+
+// After (Bun)
+import { BunRuntime, BunHttpServer } from "@effect/platform-bun"
+```
+
+Most APIs are identical, just replace `Node` prefix with `Bun` prefix.
+
+## Testing
+
+The package includes test layers for HTTP servers:
+
+```typescript
+import { BunHttpServer } from "@effect/platform-bun"
+import { Effect } from "effect"
+import { HttpRouter, HttpClient } from "effect/unstable/http"
+
+const test = Effect.gen(function* () {
+  const client = yield* HttpClient.HttpClient
+  const response = yield* client.get("/test")
+  // Make assertions
+}).pipe(Effect.provide(BunHttpServer.layerTest))
+```
+
+## Dependencies
+
+The package has minimal external dependencies and leverages Bun's built-in capabilities:
+
+- **@effect/platform-node-shared**: Shared utilities with Node.js platform
+- No heavy external dependencies (Bun provides most functionality natively)
+
+## Related Packages
+
+- [@effect/platform](/packages/platform) - Core platform abstractions
+- [@effect/platform-node](/packages/platform-node) - Node.js runtime implementations
+- [@effect/platform-browser](/packages/platform-browser) - Browser implementations

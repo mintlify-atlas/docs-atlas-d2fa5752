@@ -1,0 +1,249 @@
+---
+title: Effect
+description: Understanding the Effect type and how to work with Effects in Effect v4
+---
+
+The `Effect` type is the foundation of Effect programming. It represents a computation that can succeed, fail, or require dependencies from the environment.
+
+## What is an Effect?
+
+An `Effect<A, E, R>` is a description of a computation that:
+- Produces a value of type `A` on success
+- Can fail with an error of type `E`
+- Requires dependencies of type `R` from the environment
+
+<Info>
+  Effects are immutable values that describe computations. They don't execute until you run them with a runtime.
+</Info>
+
+## Creating Effects
+
+Effect provides several ways to create effects from common sources:
+
+### From Plain Values
+
+Use `Effect.succeed` to wrap values you already have in memory:
+
+```typescript
+import { Effect } from "effect"
+
+const config = Effect.succeed({ env: "prod", retries: 3 })
+```
+
+### From Synchronous Code
+
+Use `Effect.sync` for synchronous side effects that should not throw:
+
+```typescript
+const timestamp = Effect.sync(() => Date.now())
+```
+
+Use `Effect.try` for synchronous code that may throw:
+
+```typescript
+import { Effect, Schema } from "effect"
+
+class InvalidPayload extends Schema.TaggedErrorClass<InvalidPayload>()("InvalidPayload", {
+  input: Schema.String,
+  cause: Schema.Defect
+}) {}
+
+const parsePayload = Effect.fn("parsePayload")((input: string) =>
+  Effect.try({
+    try: () => JSON.parse(input) as { readonly userId: number },
+    catch: (cause) => new InvalidPayload({ input, cause })
+  })
+)
+```
+
+### From Promises
+
+Use `Effect.tryPromise` to wrap Promise-based APIs:
+
+```typescript
+import { Effect, Schema } from "effect"
+
+class UserLookupError extends Schema.TaggedErrorClass<UserLookupError>()("UserLookupError", {
+  userId: Schema.Number,
+  cause: Schema.Defect
+}) {}
+
+const users = new Map<number, { readonly id: number; readonly name: string }>([
+  [1, { id: 1, name: "Ada" }],
+  [2, { id: 2, name: "Lin" }]
+])
+
+const fetchUser = Effect.fn("fetchUser")((userId: number) =>
+  Effect.tryPromise({
+    async try() {
+      const user = users.get(userId)
+      if (!user) {
+        throw new Error(`Missing user ${userId}`)
+      }
+      return user
+    },
+    catch: (cause) => new UserLookupError({ userId, cause })
+  })
+)
+```
+
+### From Nullable Values
+
+Use `Effect.fromNullishOr` to turn nullable values into typed effects:
+
+```typescript
+import { Effect, Schema } from "effect"
+
+class MissingWorkspaceId extends Schema.TaggedErrorClass<MissingWorkspaceId>()("MissingWorkspaceId", {}) {}
+
+const requestHeaders = new Map<string, string>([
+  ["x-request-id", "req_1"]
+])
+
+const workspaceId = Effect.fromNullishOr(requestHeaders.get("x-workspace-id")).pipe(
+  Effect.mapError(() => new MissingWorkspaceId())
+)
+```
+
+### From Callbacks
+
+Use `Effect.callback` to wrap callback-style APIs:
+
+```typescript
+const delayed = Effect.callback<number>((resume) => {
+  const timeoutId = setTimeout(() => {
+    resume(Effect.succeed(200))
+  }, 10)
+
+  // Return a finalizer so interruption can cancel the callback
+  return Effect.sync(() => {
+    clearTimeout(timeoutId)
+  })
+})
+```
+
+## Writing Effect Code
+
+Effect provides two primary ways to write effectful computations: `Effect.gen` and `Effect.fn`.
+
+### Using Effect.gen
+
+Use `Effect.gen` to write code in an imperative style similar to async/await. You can use `yield*` to access the result of an effect:
+
+```typescript
+import { Effect, Schema } from "effect"
+
+class FileProcessingError extends Schema.TaggedErrorClass<FileProcessingError>()("FileProcessingError", {
+  message: Schema.String
+}) {}
+
+const processFile = Effect.gen(function*() {
+  yield* Effect.log("Starting the file processing...")
+  yield* Effect.log("Reading file...")
+
+  // Always return when raising an error, to ensure TypeScript understands that
+  // the function will not continue executing.
+  return yield* new FileProcessingError({ message: "Failed to read the file" })
+}).pipe(
+  // Add additional functionality with .pipe
+  Effect.catch((error) => Effect.logError(`An error occurred: ${error}`)),
+  Effect.withSpan("fileProcessing", {
+    attributes: {
+      method: "Effect.gen"
+    }
+  })
+)
+```
+
+<Note>
+  Always use `return yield*` when raising errors in `Effect.gen` to ensure TypeScript understands the control flow.
+</Note>
+
+### Using Effect.fn
+
+When writing functions that return an Effect, use `Effect.fn` instead of creating functions that return `Effect.gen`:
+
+```typescript
+import { Effect, Schema } from "effect"
+
+class SomeError extends Schema.TaggedErrorClass<SomeError>()("SomeError", {
+  message: Schema.String
+}) {}
+
+// Pass a string to Effect.fn, which will improve stack traces and also
+// attach a tracing span (using Effect.withSpan behind the scenes).
+//
+// The name string should match the function name.
+export const effectFunction = Effect.fn("effectFunction")(
+  // You can use `Effect.fn.Return` to specify the return type of the function.
+  // It accepts the same type parameters as `Effect.Effect`.
+  function*(n: number): Effect.fn.Return<string, SomeError> {
+    yield* Effect.logInfo("Received number:", n)
+
+    // Always return when raising an error
+    return yield* new SomeError({ message: "Failed to read the file" })
+  },
+  // Add additional functionality by passing in additional arguments.
+  // **Do not** use .pipe with Effect.fn
+  Effect.catch((error) => Effect.logError(`An error occurred: ${error}`)),
+  Effect.annotateLogs({
+    method: "effectFunction"
+  })
+)
+```
+
+<Warning>
+  Do not use `.pipe` with `Effect.fn`. Instead, pass additional combinators as extra arguments to `Effect.fn`.
+</Warning>
+
+## Common Operations
+
+### Transforming Effects
+
+Use `.pipe()` to chain operations on effects:
+
+```typescript
+const result = Effect.succeed(5).pipe(
+  Effect.map(n => n * 2),
+  Effect.tap(n => Effect.log(`Result: ${n}`))
+)
+```
+
+### Sequencing Effects
+
+Effects can be sequenced using `Effect.gen` or combinators:
+
+```typescript
+const program = Effect.gen(function*() {
+  const user = yield* fetchUser(1)
+  const profile = yield* fetchProfile(user.id)
+  return profile
+})
+```
+
+### Handling Success and Failure
+
+Use pattern matching or combinators to handle both channels:
+
+```typescript
+const handled = effect.pipe(
+  Effect.match({
+    onFailure: (error) => `Error: ${error}`,
+    onSuccess: (value) => `Success: ${value}`
+  })
+)
+```
+
+## Next Steps
+
+<Steps>
+  <Step title="Learn about Services">
+    Discover how to structure your application with [Services](/concepts/services)
+  </Step>
+  <Step title="Master Error Handling">
+    Learn proper error handling patterns in [Error Handling](/concepts/error-handling)
+  </Step>
+  <Step title="Manage Resources">
+    Understand resource management in [Resources](/concepts/resources)
+  </Step>
+</Steps>

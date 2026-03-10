@@ -1,0 +1,513 @@
+---
+title: Cron
+description: Parse and work with cron expressions in Effect
+---
+
+The `Cron` module provides utilities for parsing and working with cron expressions. A `Cron` instance defines when a scheduled task should run, supporting seconds, minutes, hours, days, months, and weekdays constraints with timezone-aware scheduling.
+
+## Overview
+
+Cron expressions provide a flexible way to define recurring schedules:
+- **Standard cron format** - 5 or 6 field expressions
+- **Named time zones** - IANA timezone support
+- **DST handling** - Automatic daylight saving time adjustments
+- **Next occurrence** - Calculate next scheduled time
+- **Validation** - Type-safe parsing with error handling
+
+## Creating Cron Schedules
+
+### Parsing Cron Expressions
+
+Parse standard cron expressions.
+
+```ts
+import { Cron, Result } from "effect"
+
+// 5-field format (minute hour day month weekday)
+const cron1 = Cron.parse("0 9 * * *") // Every day at 9 AM
+
+// 6-field format (second minute hour day month weekday)
+const cron2 = Cron.parse("0 0 9 * * *") // Every day at 9:00:00 AM
+
+// Handle parse result
+if (Result.isSuccess(cron1)) {
+  const schedule = cron1.success
+  console.log("Parsed successfully:", schedule)
+} else {
+  console.error("Parse error:", cron1.failure.message)
+}
+```
+
+### Unsafe Parsing
+
+Parse cron expressions, throwing on error.
+
+```ts
+import { Cron } from "effect"
+
+// Throws CronParseError if invalid
+const cron = Cron.parseUnsafe("0 9 * * *")
+
+// With timezone
+const cronWithTz = Cron.parseUnsafe("0 9 * * *", "America/New_York")
+```
+
+### Manual Construction
+
+Construct cron schedules programmatically.
+
+```ts
+import { Cron } from "effect"
+
+// Every day at 9 AM
+const morning = Cron.make({
+  minutes: [0],
+  hours: [9],
+  days: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31],
+  months: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+  weekdays: [0, 1, 2, 3, 4, 5, 6]
+})
+
+// Every 15 minutes on weekdays
+const businessHours = Cron.make({
+  minutes: [0, 15, 30, 45],
+  hours: [9, 10, 11, 12, 13, 14, 15, 16, 17],
+  days: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31],
+  months: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+  weekdays: [1, 2, 3, 4, 5] // Monday to Friday
+})
+```
+
+## Cron Expression Format
+
+### Standard Format
+
+```
+┌───────────── second (0-59, optional)
+│ ┌───────────── minute (0-59)
+│ │ ┌───────────── hour (0-23)
+│ │ │ ┌───────────── day of month (1-31)
+│ │ │ │ ┌───────────── month (1-12)
+│ │ │ │ │ ┌───────────── day of week (0-6, 0=Sunday)
+│ │ │ │ │ │
+│ │ │ │ │ │
+* * * * * *
+```
+
+### Common Examples
+
+```ts
+import { Cron } from "effect"
+
+// Every minute
+const everyMinute = Cron.parseUnsafe("* * * * *")
+
+// Every hour at minute 0
+const hourly = Cron.parseUnsafe("0 * * * *")
+
+// Every day at midnight
+const daily = Cron.parseUnsafe("0 0 * * *")
+
+// Every Monday at 9 AM
+const weeklyMonday = Cron.parseUnsafe("0 9 * * 1")
+
+// First day of every month at midnight
+const monthly = Cron.parseUnsafe("0 0 1 * *")
+
+// Every weekday at 9 AM
+const weekdays = Cron.parseUnsafe("0 9 * * 1-5")
+
+// Every 15 minutes
+const every15min = Cron.parseUnsafe("*/15 * * * *")
+
+// At 9:30 AM and 5:30 PM on weekdays
+const twiceDaily = Cron.parseUnsafe("30 9,17 * * 1-5")
+```
+
+## Cron Syntax Features
+
+### Wildcards
+
+Match all values.
+
+```ts
+import { Cron } from "effect"
+
+// Run every minute of every hour
+const everyMinute = Cron.parseUnsafe("* * * * *")
+
+// Run at second 0 of every minute
+const everyMinuteAtZero = Cron.parseUnsafe("0 * * * * *")
+```
+
+### Lists
+
+Specify multiple values.
+
+```ts
+import { Cron } from "effect"
+
+// Run at 9 AM and 5 PM
+const morningEvening = Cron.parseUnsafe("0 9,17 * * *")
+
+// Run on Monday, Wednesday, Friday
+const mwf = Cron.parseUnsafe("0 9 * * 1,3,5")
+```
+
+### Ranges
+
+Specify a range of values.
+
+```ts
+import { Cron } from "effect"
+
+// Run from 9 AM to 5 PM
+const businessHours = Cron.parseUnsafe("0 9-17 * * *")
+
+// Run Monday through Friday
+const weekdays = Cron.parseUnsafe("0 9 * * 1-5")
+
+// Run days 1-15 of the month
+const firstHalf = Cron.parseUnsafe("0 0 1-15 * *")
+```
+
+### Steps
+
+Specify intervals.
+
+```ts
+import { Cron } from "effect"
+
+// Every 5 minutes
+const every5min = Cron.parseUnsafe("*/5 * * * *")
+
+// Every 2 hours
+const every2hours = Cron.parseUnsafe("0 */2 * * *")
+
+// Every other day
+const everyOtherDay = Cron.parseUnsafe("0 0 */2 * *")
+
+// Every 15 minutes during business hours
+const business15min = Cron.parseUnsafe("*/15 9-17 * * *")
+```
+
+### Month and Day Names
+
+Use named values.
+
+```ts
+import { Cron } from "effect"
+
+// Months: jan, feb, mar, apr, may, jun, jul, aug, sep, oct, nov, dec
+const summerMonths = Cron.parseUnsafe("0 9 * jun-aug *")
+const quarterly = Cron.parseUnsafe("0 9 1 jan,apr,jul,oct *")
+
+// Days: sun, mon, tue, wed, thu, fri, sat
+const weekendMornings = Cron.parseUnsafe("0 9 * * sat,sun")
+const midweek = Cron.parseUnsafe("0 9 * * wed")
+```
+
+## Working with Time Zones
+
+### Named Time Zones
+
+Use IANA time zone identifiers.
+
+```ts
+import { Cron } from "effect"
+
+// New York time
+const nySchedule = Cron.parseUnsafe("0 9 * * *", "America/New_York")
+
+// London time
+const londonSchedule = Cron.parseUnsafe("0 9 * * *", "Europe/London")
+
+// Tokyo time
+const tokyoSchedule = Cron.parseUnsafe("0 9 * * *", "Asia/Tokyo")
+
+// UTC
+const utcSchedule = Cron.parseUnsafe("0 9 * * *", "UTC")
+```
+
+### DST Handling
+
+Cron automatically handles daylight saving time transitions.
+
+```ts
+import { Cron } from "effect"
+
+// Schedule respects DST transitions in New York
+const schedule = Cron.parseUnsafe("0 2 * * *", "America/New_York")
+
+// During DST transition, this will correctly adjust
+const next = Cron.next(schedule, new Date("2024-03-10T00:00:00Z"))
+```
+
+## Checking Schedule Matches
+
+Determine if a date matches the schedule.
+
+```ts
+import { Cron } from "effect"
+
+const cron = Cron.parseUnsafe("0 9 * * 1-5") // Weekdays at 9 AM
+
+// Check if specific dates match
+const matches1 = Cron.match(cron, new Date("2024-01-08T09:00:00Z"))
+console.log(matches1) // true - Monday at 9 AM
+
+const matches2 = Cron.match(cron, new Date("2024-01-08T10:00:00Z"))
+console.log(matches2) // false - wrong hour
+
+const matches3 = Cron.match(cron, new Date("2024-01-07T09:00:00Z"))
+console.log(matches3) // false - Sunday
+```
+
+## Getting Next Occurrence
+
+Calculate the next scheduled time.
+
+```ts
+import { Cron } from "effect"
+
+const cron = Cron.parseUnsafe("0 9 * * 1-5") // Weekdays at 9 AM
+
+// Get next occurrence from now
+const nextRun = Cron.next(cron)
+console.log("Next run:", nextRun)
+
+// Get next occurrence from specific date
+const after = new Date("2024-01-01T00:00:00Z")
+const nextAfter = Cron.next(cron, after)
+console.log("Next after Jan 1:", nextAfter)
+```
+
+## Generating Sequences
+
+Create an iterator of scheduled dates.
+
+```ts
+import { Cron } from "effect"
+
+const cron = Cron.parseUnsafe("0 9 * * 1-5") // Weekdays at 9 AM
+
+// Get infinite iterator of occurrences
+const iterator = Cron.sequence(cron, new Date("2024-01-01"))
+
+// Get next 5 occurrences
+const next5 = Array.from(
+  { length: 5 },
+  () => iterator.next().value
+)
+
+console.log("Next 5 occurrences:")
+next5.forEach(date => console.log(date.toISOString()))
+```
+
+## Using with Schedule
+
+Integrate cron schedules with Effect schedules.
+
+```ts
+import { Effect, Schedule } from "effect"
+
+// Every minute
+const everyMinute = Schedule.cron("* * * * *")
+
+// Every day at 2:30 AM
+const dailyBackup = Schedule.cron("30 2 * * *")
+
+// Every Monday at 9 AM (with timezone)
+const weeklyReport = Schedule.cron("0 9 * * 1", "America/New_York")
+
+const program = Effect.repeat(
+  Effect.log("Scheduled task"),
+  everyMinute
+)
+```
+
+## Common Patterns
+
+### Daily Tasks
+
+```ts
+import { Cron } from "effect"
+
+// Every day at midnight
+const midnight = Cron.parseUnsafe("0 0 * * *")
+
+// Every day at 3 AM
+const earlyMorning = Cron.parseUnsafe("0 3 * * *")
+
+// Every day at noon
+const noon = Cron.parseUnsafe("0 12 * * *")
+```
+
+### Weekly Tasks
+
+```ts
+import { Cron } from "effect"
+
+// Every Sunday at midnight
+const weeklyReset = Cron.parseUnsafe("0 0 * * 0")
+
+// Every Monday at 9 AM
+const weeklyMeeting = Cron.parseUnsafe("0 9 * * 1")
+
+// Every Friday at 5 PM
+const weeklyReport = Cron.parseUnsafe("0 17 * * 5")
+```
+
+### Monthly Tasks
+
+```ts
+import { Cron } from "effect"
+
+// First day of month at midnight
+const monthlyReset = Cron.parseUnsafe("0 0 1 * *")
+
+// 15th and last day of month
+const bimonthly = Cron.parseUnsafe("0 9 1,15 * *")
+
+// Last day of month (approximate)
+const endOfMonth = Cron.parseUnsafe("0 0 28-31 * *")
+```
+
+### Business Hours
+
+```ts
+import { Cron } from "effect"
+
+// Every hour during business hours on weekdays
+const businessHours = Cron.parseUnsafe("0 9-17 * * 1-5")
+
+// Every 30 minutes during business hours
+const halfHourly = Cron.parseUnsafe("0,30 9-17 * * 1-5")
+
+// Every 15 minutes during business hours
+const quarterHourly = Cron.parseUnsafe("0,15,30,45 9-17 * * 1-5")
+```
+
+## Error Handling
+
+### Parse Errors
+
+Handle parsing errors gracefully.
+
+```ts
+import { Cron, Result } from "effect"
+
+const result = Cron.parse("invalid expression")
+
+if (Result.isFailure(result)) {
+  const error = result.failure
+  console.error("Parse failed:", error.message)
+  console.error("Input:", error.input)
+  
+  if (Cron.isCronParseError(error)) {
+    // Handle specific cron parse error
+    console.error("This is a cron parse error")
+  }
+}
+```
+
+### Safe Operations
+
+```ts
+import { Cron, Result } from "effect"
+
+// Safe parsing
+const parseSafe = (expr: string) => {
+  const result = Cron.parse(expr)
+  return Result.match(result, {
+    onSuccess: (cron) => ({ success: true, cron }),
+    onFailure: (error) => ({ success: false, error: error.message })
+  })
+}
+
+const parsed = parseSafe("0 9 * * *")
+if (parsed.success) {
+  console.log("Parsed:", parsed.cron)
+}
+```
+
+## Comparing Cron Schedules
+
+```ts
+import { Cron } from "effect"
+
+const cron1 = Cron.make({
+  minutes: [0, 30],
+  hours: [9],
+  days: [1, 15],
+  months: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+  weekdays: [1, 2, 3, 4, 5]
+})
+
+const cron2 = Cron.make({
+  minutes: [30, 0], // Different order
+  hours: [9],
+  days: [15, 1],    // Different order
+  months: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+  weekdays: [1, 2, 3, 4, 5]
+})
+
+// Order doesn't matter
+if (Cron.equals(cron1, cron2)) {
+  console.log("Schedules are equivalent")
+}
+
+// Using Equivalence
+if (Cron.Equivalence(cron1, cron2)) {
+  console.log("Same schedule")
+}
+```
+
+## API Reference
+
+### Types
+
+```ts
+interface Cron {
+  readonly tz: DateTime.TimeZone | undefined
+  readonly seconds: ReadonlySet<number>
+  readonly minutes: ReadonlySet<number>
+  readonly hours: ReadonlySet<number>
+  readonly days: ReadonlySet<number>
+  readonly months: ReadonlySet<number>
+  readonly weekdays: ReadonlySet<number>
+}
+
+class CronParseError {
+  readonly message: string
+  readonly input?: string
+}
+```
+
+### Constructors
+
+- `parse(cron: string, tz?: string | TimeZone): Result<Cron, CronParseError>`
+- `parseUnsafe(cron: string, tz?: string | TimeZone): Cron`
+- `make(values: CronValues): Cron`
+
+### Operations
+
+- `match(cron: Cron, date: DateTime.Input): boolean`
+- `next(cron: Cron, now?: DateTime.Input): Date`
+- `sequence(cron: Cron, now?: DateTime.Input): IterableIterator<Date>`
+
+### Guards
+
+- `isCron(u: unknown): u is Cron`
+- `isCronParseError(u: unknown): u is CronParseError`
+
+### Comparison
+
+- `equals(self: Cron, that: Cron): boolean`
+- `Equivalence: Equivalence<Cron>`
+
+## Related
+
+- [Schedule](./schedule) - Using cron with schedules
+- [DateTime](./datetime) - Working with dates and times
+- [Duration](./duration) - Time spans

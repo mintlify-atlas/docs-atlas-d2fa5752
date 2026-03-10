@@ -1,0 +1,407 @@
+---
+title: Result
+---
+
+A synchronous, pure type for representing computations that can succeed (`Success<A>`) or fail (`Failure<E>`). Unlike `Effect`, `Result` is evaluated eagerly and carries no side effects.
+
+## Mental Model
+
+- **`Result<A, E>`** is a discriminated union: `Success<A, E> | Failure<A, E>`
+- **`Success`** wraps a value of type `A`, accessed via `.success`
+- **`Failure`** wraps an error of type `E`, accessed via `.failure`
+- **Monad**: chain operations with `flatMap`, compose pipelines with `pipe`
+- **Immutable**: all operations return new `Result` values; the input is never mutated
+- **Yieldable**: in `Effect.gen`, producing the inner value or short-circuiting on failure
+
+> **Note**: In Effect v3.x, this type was called `Either`. It has been renamed to `Result` in v4.
+
+## Key Operations
+
+### Create
+
+Build Results from values:
+
+```ts
+import { Result } from "effect"
+
+// Success
+const ok = Result.succeed(42)
+// { _tag: "Success", success: 42 }
+
+// Failure
+const err = Result.fail("something went wrong")
+// { _tag: "Failure", failure: "something went wrong" }
+
+// From nullable
+const fromNull = Result.fromNullishOr(null, (v) => "was null")
+// Failure("was null")
+
+const fromValue = Result.fromNullishOr(42, (v) => "was null")
+// Success(42)
+
+// From Option
+const fromSome = Result.fromOption(Option.some(1), () => "missing")
+// Success(1)
+
+const fromNone = Result.fromOption(Option.none(), () => "missing")
+// Failure("missing")
+
+// From throwing function
+const parseOk = Result.try(() => JSON.parse('{"x": 1}'))
+// Success({ x: 1 })
+
+const parseErr = Result.try({
+  try: () => JSON.parse("invalid"),
+  catch: (e) => `Parse failed: ${e}`
+})
+// Failure("Parse failed: ...")
+```
+
+### Check
+
+Test and narrow:
+
+```ts
+import { Result } from "effect"
+
+const value: Result<number, string> = Result.succeed(42)
+
+// Type guards
+if (Result.isSuccess(value)) {
+  console.log(value.success) // 42 (type narrowed to Success)
+}
+
+if (Result.isFailure(value)) {
+  console.log(value.failure) // Type narrowed to Failure
+}
+
+// Generic check
+const isResult = Result.isResult(value) // true
+```
+
+### Transform
+
+Map both channels:
+
+```ts
+import { Result } from "effect"
+
+const value = Result.succeed(5)
+
+// Map success
+const doubled = Result.map(value, (n) => n * 2)
+// Success(10)
+
+// Map error
+const withContext = Result.mapError(
+  Result.fail("not found"),
+  (e) => `Error: ${e}`
+)
+// Failure("Error: not found")
+
+// Map both
+const both = Result.mapBoth(value, {
+  onSuccess: (n) => n * 2,
+  onFailure: (e: never) => `Error: ${e}`
+})
+// Success(10)
+```
+
+### Chain
+
+Sequence operations:
+
+```ts
+import { Result } from "effect"
+
+const parse = (s: string): Result<number, string> =>
+  isNaN(Number(s))
+    ? Result.fail("not a number")
+    : Result.succeed(Number(s))
+
+const ensurePositive = (n: number): Result<number, string> =>
+  n > 0 ? Result.succeed(n) : Result.fail("not positive")
+
+// FlatMap (short-circuits on first failure)
+const result = Result.flatMap(parse("42"), ensurePositive)
+// Success(42)
+
+const failed = Result.flatMap(parse("-5"), ensurePositive)
+// Failure("not positive")
+
+// AndThen (flexible)
+const result2 = Result.andThen(parse("42"), (n) => n * 2)
+// Success(84)
+```
+
+### Unwrap
+
+Extract the value:
+
+```ts
+import { Result } from "effect"
+
+const ok = Result.succeed(42)
+const err = Result.fail("error")
+
+// With fallback
+const value1 = Result.getOrElse(ok, (e) => 0) // 42
+const value2 = Result.getOrElse(err, (e) => 0) // 0
+
+// To null/undefined
+const asNull = Result.getOrNull(err) // null
+const asUndef = Result.getOrUndefined(err) // undefined
+
+// Merge (extract A | E)
+const merged1 = Result.merge(ok) // 42
+const merged2 = Result.merge(err) // "error"
+
+// Throw on failure
+try {
+  const value = Result.getOrThrow(err) // throws "error"
+} catch (e) {
+  console.log(e) // "error"
+}
+
+// Custom error
+try {
+  const value = Result.getOrThrowWith(
+    err,
+    (e) => new Error(`Failed: ${e}`)
+  )
+} catch (e) {
+  console.log(e.message) // "Failed: error"
+}
+```
+
+### Match
+
+Pattern match:
+
+```ts
+import { Result } from "effect"
+
+const value: Result<number, string> = Result.succeed(42)
+
+const message = Result.match(value, {
+  onSuccess: (n) => `Got ${n}`,
+  onFailure: (e) => `Error: ${e}`
+})
+// "Got 42"
+```
+
+### Filter
+
+Validate values:
+
+```ts
+import { Result } from "effect"
+
+const value = Result.succeed(5)
+
+// Lift predicate
+const positive = Result.liftPredicate(
+  5,
+  (n: number) => n > 0,
+  (n) => `${n} is not positive`
+)
+// Success(5)
+
+// Filter existing Result
+const filtered = Result.filterOrFail(
+  value,
+  (n) => n > 10,
+  (n) => `${n} is too small`
+)
+// Failure("5 is too small")
+```
+
+### Recover
+
+Handle failures:
+
+```ts
+import { Result } from "effect"
+
+const primary = Result.fail("primary failed")
+
+// Provide fallback
+const recovered = Result.orElse(
+  primary,
+  (e) => Result.succeed(99)
+)
+// Success(99)
+
+// Still a failure if both fail
+const bothFailed = Result.orElse(
+  primary,
+  (e) => Result.fail("fallback also failed")
+)
+// Failure("fallback also failed")
+```
+
+### Combine
+
+Join multiple Results:
+
+```ts
+import { Result } from "effect"
+
+const a = Result.succeed(2)
+const b = Result.succeed(3)
+
+// Combine all (tuple)
+const tuple = Result.all([a, b])
+// Success([2, 3])
+
+// Combine all (struct)
+const struct = Result.all({ x: a, y: b })
+// Success({ x: 2, y: 3 })
+
+// Short-circuits on first failure
+const withError = Result.all([a, Result.fail("err"), b])
+// Failure("err")
+```
+
+### Convert
+
+To/from Option:
+
+```ts
+import { Option, Result } from "effect"
+
+// To Option (discard error)
+const successOpt = Result.getSuccess(Result.succeed(1))
+// Some(1)
+
+const failureOpt = Result.getSuccess(Result.fail("err"))
+// None
+
+// Extract error as Option
+const errorOpt = Result.getFailure(Result.fail("err"))
+// Some("err")
+```
+
+### Flip
+
+Swap channels:
+
+```ts
+import { Result } from "effect"
+
+const ok = Result.succeed(42)
+const flipped = Result.flip(ok)
+// Failure(42)
+
+const err = Result.fail("error")
+const flipped2 = Result.flip(err)
+// Success("error")
+```
+
+### Generator
+
+Compose with generator syntax:
+
+```ts
+import { Result } from "effect"
+
+const result = Result.gen(function* () {
+  const a = yield* Result.succeed(2)
+  const b = yield* Result.succeed(3)
+  return a + b
+})
+// Success(5)
+
+const failed = Result.gen(function* () {
+  const a = yield* Result.succeed(2)
+  const b = yield* Result.fail("error") // Short-circuits
+  return a + b // Never reached
+})
+// Failure("error")
+```
+
+### Do Notation
+
+Build objects step-by-step:
+
+```ts
+import { Result, pipe } from "effect"
+
+const result = pipe(
+  Result.Do,
+  Result.bind("x", () => Result.succeed(2)),
+  Result.bind("y", () => Result.succeed(3)),
+  Result.let("sum", ({ x, y }) => x + y)
+)
+// Success({ x: 2, y: 3, sum: 5 })
+```
+
+## Type Signatures
+
+```ts
+// Core types
+type Result<A, E = never> = Success<A, E> | Failure<A, E>
+
+interface Success<A, E> {
+  readonly _tag: "Success"
+  readonly success: A
+}
+
+interface Failure<A, E> {
+  readonly _tag: "Failure"
+  readonly failure: E
+}
+
+// Creation
+const succeed: <A>(right: A) => Result<A>
+const fail: <E>(left: E) => Result<never, E>
+const try: {
+  <A, E>(options: {
+    readonly try: () => A
+    readonly catch: (error: unknown) => E
+  }): Result<A, E>
+  <A>(evaluate: () => A): Result<A, unknown>
+}
+
+// Guards
+const isResult: (input: unknown) => input is Result<unknown, unknown>
+const isSuccess: <A, E>(self: Result<A, E>) => self is Success<A, E>
+const isFailure: <A, E>(self: Result<A, E>) => self is Failure<A, E>
+
+// Transform
+const map: {
+  <A, A2>(f: (ok: A) => A2): <E>(self: Result<A, E>) => Result<A2, E>
+  <A, E, A2>(self: Result<A, E>, f: (ok: A) => A2): Result<A2, E>
+}
+const mapError: {
+  <E, E2>(f: (err: E) => E2): <A>(self: Result<A, E>) => Result<A, E2>
+  <A, E, E2>(self: Result<A, E>, f: (err: E) => E2): Result<A, E2>
+}
+
+// Chain
+const flatMap: {
+  <A, A2, E2>(f: (a: A) => Result<A2, E2>): <E>(self: Result<A, E>) => Result<A2, E | E2>
+  <A, E, A2, E2>(self: Result<A, E>, f: (a: A) => Result<A2, E2>): Result<A2, E | E2>
+}
+
+// Unwrap
+const getOrElse: {
+  <E, A2>(onFailure: (err: E) => A2): <A>(self: Result<A, E>) => A2 | A
+  <A, E, A2>(self: Result<A, E>, onFailure: (err: E) => A2): A | A2
+}
+const getOrThrow: <A, E>(self: Result<A, E>) => A
+
+// Match
+const match: {
+  <E, B, A, C = B>(options: {
+    readonly onFailure: (error: E) => B
+    readonly onSuccess: (ok: A) => C
+  }): (self: Result<A, E>) => B | C
+}
+```
+
+## See Also
+
+- [Option](/api/option) — For optional values without error info
+- [Effect](/api/effect) — For async/effectful computations
+- [Exit](/api/exit) — Result with interruption/defect info

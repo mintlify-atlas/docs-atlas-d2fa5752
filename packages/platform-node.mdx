@@ -1,0 +1,226 @@
+---
+title: Platform Node
+description: Node.js platform-specific implementations for Effect
+---
+
+The `@effect/platform-node` package provides Node.js-specific implementations of Effect's platform abstractions, enabling you to build robust server-side applications with file system access, HTTP servers, child processes, and more.
+
+## Installation
+
+```bash
+npm install @effect/platform-node effect
+```
+
+Requires Node.js 18.0.0 or later.
+
+## When to Use
+
+Use `@effect/platform-node` when:
+
+- Building server-side applications with Node.js
+- You need access to file system, HTTP servers, or child processes
+- You want to leverage Node.js-specific features like clustering, Redis, or worker threads
+- Building CLI tools with terminal interaction and stdio handling
+
+## Core Features
+
+### Runtime
+
+The `NodeRuntime` module provides the entry point for running Effect programs in Node.js:
+
+```typescript
+import { NodeRuntime } from "@effect/platform-node"
+import { Effect } from "effect"
+
+const program = Effect.gen(function* () {
+  yield* Effect.log("Hello from Node.js!")
+  return "success"
+})
+
+NodeRuntime.runMain(program)
+```
+
+**Features:**
+- Automatic error handling and logging
+- Signal management (handles Ctrl+C gracefully)
+- Exit code handling based on success/failure
+- Optional custom teardown logic
+
+### HTTP Server
+
+Create HTTP servers with the `NodeHttpServer` module:
+
+```typescript
+import { NodeHttpServer } from "@effect/platform-node"
+import { Effect, Layer } from "effect"
+import { HttpRouter, HttpServerResponse } from "effect/unstable/http"
+
+const router = HttpRouter.empty.pipe(
+  HttpRouter.add(
+    "GET",
+    "/hello",
+    Effect.succeed(HttpServerResponse.text("Hello, World!"))
+  )
+)
+
+const server = router.pipe(
+  HttpRouter.serve,
+  Layer.provide(NodeHttpServer.layer({ port: 3000 }))
+)
+
+NodeRuntime.runMain(Layer.launch(server))
+```
+
+### HTTP Client
+
+Make HTTP requests using the `NodeHttpClient` module (built on Undici):
+
+```typescript
+import { NodeHttpClient } from "@effect/platform-node"
+import { Effect } from "effect"
+import { HttpClient, HttpClientRequest } from "effect/unstable/http"
+
+const program = Effect.gen(function* () {
+  const client = yield* HttpClient.HttpClient
+  const response = yield* client.get("https://api.example.com/data")
+  const data = yield* response.json
+  return data
+}).pipe(Effect.provide(NodeHttpClient.layerUndici))
+```
+
+### File System
+
+Access the file system with the `NodeFileSystem` module:
+
+```typescript
+import { NodeFileSystem, NodeRuntime } from "@effect/platform-node"
+import { Effect } from "effect"
+import { FileSystem } from "effect/unstable/platform"
+
+const program = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem
+  const content = yield* fs.readFileString("./data.txt")
+  yield* Effect.log(`File content: ${content}`)
+  yield* fs.writeFileString("./output.txt", "Hello!")
+}).pipe(Effect.provide(NodeFileSystem.layer))
+
+NodeRuntime.runMain(program)
+```
+
+### Child Processes
+
+Spawn and manage child processes:
+
+```typescript
+import { NodeChildProcessSpawner, NodeRuntime } from "@effect/platform-node"
+import { Effect } from "effect"
+import { ChildProcessSpawner } from "effect/unstable/platform"
+
+const program = Effect.gen(function* () {
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+  const result = yield* spawner.spawn("ls", ["-la"])
+  yield* Effect.log(`Exit code: ${result.exitCode}`)
+}).pipe(Effect.provide(NodeChildProcessSpawner.layer))
+
+NodeRuntime.runMain(program)
+```
+
+### Socket Servers
+
+Create TCP/WebSocket servers:
+
+```typescript
+import { NodeSocketServer, NodeRuntime } from "@effect/platform-node"
+import { Effect, Stream } from "effect"
+import { Socket } from "effect/unstable/socket"
+
+const program = Socket.makeHandler((socket) =>
+  Stream.fromEffect(socket.write("Hello from socket!")).pipe(
+    Stream.drain,
+    Effect.ensuring(socket.close)
+  )
+).pipe(
+  Effect.flatMap((handler) =>
+    NodeSocketServer.make({
+      port: 8080,
+      handler
+    })
+  ),
+  Effect.scoped
+)
+
+NodeRuntime.runMain(program)
+```
+
+## Available Modules
+
+| Module | Description |
+|--------|-------------|
+| `NodeRuntime` | Run Effect programs as Node.js applications |
+| `NodeHttpServer` | Create HTTP/HTTPS servers |
+| `NodeHttpClient` | Make HTTP requests (Undici-based) |
+| `NodeFileSystem` | File system operations |
+| `NodeChildProcessSpawner` | Spawn and manage child processes |
+| `NodeSocket` | TCP socket client |
+| `NodeSocketServer` | TCP socket server |
+| `NodeWorker` | Worker thread management |
+| `NodeWorkerRunner` | Worker runner for parallel processing |
+| `NodePath` | Path manipulation |
+| `NodeStdio` | Standard input/output/error streams |
+| `NodeTerminal` | Terminal interaction |
+| `NodeRedis` | Redis client (requires `ioredis`) |
+| `NodeClusterHttp` | HTTP server clustering |
+| `NodeClusterSocket` | Socket server clustering |
+| `NodeMultipart` | Multipart form data handling |
+| `NodeStream` | Node.js stream integration |
+| `NodeSink` | Stream sinks for Node.js |
+| `Mime` | MIME type utilities |
+| `Undici` | Direct access to Undici client |
+
+## Platform Services
+
+The `NodeServices` module provides a convenient layer that includes all common Node.js services:
+
+```typescript
+import { NodeServices, NodeRuntime } from "@effect/platform-node"
+import { Effect } from "effect"
+import { FileSystem } from "effect/unstable/platform"
+
+const program = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem
+  // All Node.js services are available
+}).pipe(Effect.provide(NodeServices.layer))
+
+NodeRuntime.runMain(program)
+```
+
+## Testing
+
+The package includes test layers for HTTP servers:
+
+```typescript
+import { NodeHttpServer } from "@effect/platform-node"
+import { Effect } from "effect"
+import { HttpRouter, HttpClient } from "effect/unstable/http"
+
+const test = Effect.gen(function* () {
+  const router = yield* HttpRouter.empty
+  const client = yield* HttpClient.HttpClient
+  const response = yield* client.get("/test")
+  // Make assertions
+}).pipe(Effect.provide(NodeHttpServer.layerTest))
+```
+
+## Dependencies
+
+The package has minimal external dependencies:
+
+- **mime**: MIME type detection
+- **undici**: Fast HTTP/1.1 client (Node.js standard)
+- **ioredis** (peer): Optional Redis client support
+
+## Related Packages
+
+- [@effect/platform](/packages/platform) - Core platform abstractions
+- [@effect/platform-bun](/packages/platform-bun) - Bun runtime implementations
+- [@effect/platform-browser](/packages/platform-browser) - Browser implementations

@@ -1,0 +1,442 @@
+---
+title: Layer
+description: Dependency injection and service management for Effect applications
+---
+
+# Layer
+
+A `Layer<ROut, E, RIn>` describes how to build one or more services in your application. Layers are the idiomatic way in Effect to create services that depend on other services.
+
+## Type Signature
+
+```typescript
+interface Layer<in ROut, out E = never, out RIn = never>
+```
+
+<ParamField path="ROut" type="type parameter">
+  The services this layer provides (contravariant)
+</ParamField>
+
+<ParamField path="E" type="type parameter" default="never">
+  The possible errors during layer construction
+</ParamField>
+
+<ParamField path="RIn" type="type parameter" default="never">
+  The services this layer requires as dependencies
+</ParamField>
+
+## Key Features
+
+- **Dependency Injection**: Build services with explicit dependencies
+- **Resource Management**: Automatic cleanup with scoped resources
+- **Memoization**: Layers are shared by default - built once and reused
+- **Composition**: Layers can be combined and merged
+- **Type-safe**: Dependencies and outputs tracked in types
+
+## Creating Layers
+
+### succeed
+
+Constructs a layer from a concrete service implementation.
+
+```typescript
+import { Effect, Layer, ServiceMap } from "effect"
+
+class Database extends ServiceMap.Service<Database, {
+  readonly query: (sql: string) => Effect.Effect<string>
+}>()("Database") {}
+
+const databaseLayer = Layer.succeed(Database)({
+  query: Effect.fn("Database.query")((sql: string) => 
+    Effect.succeed(`Query result: ${sql}`)
+  )
+})
+```
+
+**Signature:**
+```typescript
+function succeed<I, S>(
+  service: ServiceMap.Key<I, S>
+): (resource: S) => Layer<I>
+
+function succeed<I, S>(
+  service: ServiceMap.Key<I, S>,
+  resource: S
+): Layer<I>
+```
+
+<ParamField path="service" type="ServiceMap.Key<I, S>" required>
+  The service identifier (typically a class extending `ServiceMap.Service`)
+</ParamField>
+
+<ParamField path="resource" type="S" required>
+  The service implementation
+</ParamField>
+
+<ResponseField name="returns" type="Layer<I>">
+  A layer that provides the service
+</ResponseField>
+
+### effect
+
+Constructs a layer from an effectful resource acquisition.
+
+```typescript
+const databaseLayer = Layer.effect(Database)(
+  Effect.gen(function*() {
+    console.log("Connecting to database...")
+    yield* Effect.acquireRelease(
+      Effect.sync(() => ({ query: (sql: string) => Effect.succeed("result") })),
+      () => Effect.sync(() => console.log("Database closed"))
+    )
+    return { query: (sql: string) => Effect.succeed("result") }
+  })
+)
+```
+
+**Signature:**
+```typescript
+function effect<I, S, E, R>(
+  service: ServiceMap.Key<I, S>
+): (effect: Effect.Effect<S, E, R>) => Layer<I, E, R>
+```
+
+<ParamField path="service" type="ServiceMap.Key<I, S>" required>
+  The service identifier
+</ParamField>
+
+<ParamField path="effect" type="Effect.Effect<S, E, R>" required>
+  An effect that produces the service implementation
+</ParamField>
+
+<ResponseField name="returns" type="Layer<I, E, R>">
+  A layer that builds the service with potential errors and dependencies
+</ResponseField>
+
+### sync
+
+Lazily constructs a layer from a synchronous thunk.
+
+```typescript
+const configLayer = Layer.sync(Config)(() => ({
+  apiKey: process.env.API_KEY || "default-key",
+  timeout: 5000
+}))
+```
+
+**Signature:**
+```typescript
+function sync<I, S>(
+  service: ServiceMap.Key<I, S>
+): (evaluate: () => S) => Layer<I>
+
+function sync<I, S>(
+  service: ServiceMap.Key<I, S>,
+  evaluate: () => S
+): Layer<I>
+```
+
+<ParamField path="service" type="ServiceMap.Key<I, S>" required>
+  The service identifier
+</ParamField>
+
+<ParamField path="evaluate" type="() => S" required>
+  A function that returns the service implementation (evaluated when layer is built)
+</ParamField>
+
+<ResponseField name="returns" type="Layer<I>">
+  A layer that lazily provides the service
+</ResponseField>
+
+### scoped
+
+Constructs a layer from a scoped resource that requires cleanup.
+
+```typescript
+const poolLayer = Layer.scoped(ConnectionPool)(
+  Effect.gen(function*() {
+    const pool = yield* Effect.acquireRelease(
+      Effect.sync(() => createPool()),
+      (pool) => Effect.sync(() => pool.close())
+    )
+    return pool
+  })
+)
+```
+
+**Signature:**
+```typescript
+function scoped<I, S, E, R>(
+  service: ServiceMap.Key<I, S>
+): (effect: Effect.Effect<S, E, R>) => Layer<I, E, Exclude<R, Scope>>
+```
+
+<ParamField path="service" type="ServiceMap.Key<I, S>" required>
+  The service identifier
+</ParamField>
+
+<ParamField path="effect" type="Effect.Effect<S, E, R>" required>
+  A scoped effect that acquires and releases the service
+</ParamField>
+
+<ResponseField name="returns" type="Layer<I, E, R>">
+  A layer with automatic resource management
+</ResponseField>
+
+## Composing Layers
+
+### merge
+
+Combines two layers into one that provides both services.
+
+```typescript
+const combinedLayer = Layer.merge(databaseLayer, loggerLayer)
+// Layer<Database | Logger>
+```
+
+**Signature:**
+```typescript
+function merge<ROut, E, RIn, ROut2, E2, RIn2>(
+  self: Layer<ROut, E, RIn>,
+  that: Layer<ROut2, E2, RIn2>
+): Layer<ROut | ROut2, E | E2, RIn | RIn2>
+```
+
+### mergeAll
+
+Merges multiple layers into a single layer.
+
+```typescript
+const appLayer = Layer.mergeAll(
+  databaseLayer,
+  loggerLayer,
+  cacheLayer,
+  configLayer
+)
+```
+
+**Signature:**
+```typescript
+function mergeAll<Layers extends ReadonlyArray<Layer<any, any, any>>>(
+  ...layers: Layers
+): Layer</* union of outputs */, /* union of errors */, /* union of inputs */>
+```
+
+### provide
+
+Provides a layer's required dependencies using another layer.
+
+```typescript
+const userServiceLayer = Layer.effect(UserService)(
+  Effect.gen(function*() {
+    const db = yield* Database
+    return { getUser: (id: string) => db.query(`SELECT * FROM users WHERE id = ${id}`) }
+  })
+)
+
+// UserService needs Database, so provide it
+const completeLayer = userServiceLayer.pipe(
+  Layer.provide(databaseLayer)
+)
+```
+
+**Signature:**
+```typescript
+function provide<ROut2, E2, RIn2>(
+  that: Layer<ROut2, E2, RIn2>
+): <ROut, E, RIn>(
+  self: Layer<ROut, E, RIn>
+) => Layer<ROut, E | E2, RIn2 | Exclude<RIn, ROut2>>
+```
+
+## Building and Using Layers
+
+### build
+
+Builds a layer into a scoped value.
+
+```typescript
+const program = Effect.gen(function*() {
+  const services = yield* Layer.build(databaseLayer)
+  const database = ServiceMap.get(services, Database)
+  return yield* database.query("SELECT * FROM users")
+})
+```
+
+**Signature:**
+```typescript
+function build<RIn, E, ROut>(
+  self: Layer<ROut, E, RIn>
+): Effect.Effect<ServiceMap.ServiceMap<ROut>, E, RIn | Scope>
+```
+
+<ParamField path="self" type="Layer<ROut, E, RIn>" required>
+  The layer to build
+</ParamField>
+
+<ResponseField name="returns" type="Effect<ServiceMap<ROut>, E, RIn | Scope>">
+  An effect that builds the layer and returns its services
+</ResponseField>
+
+### launch
+
+Builds and launches a layer, returning its built services.
+
+```typescript
+const services = await Effect.runPromise(
+  Layer.launch(appLayer)
+)
+```
+
+**Signature:**
+```typescript
+function launch<ROut, E, RIn>(
+  self: Layer<ROut, E, RIn>
+): Effect.Effect<ServiceMap.ServiceMap<ROut>, E, RIn>
+```
+
+## Advanced Features
+
+### MemoMap
+
+A `MemoMap` ensures layers are only built once and shared across usages.
+
+```typescript
+const program = Effect.gen(function*() {
+  const memoMap = yield* Layer.makeMemoMap
+  const scope = yield* Effect.scope
+  
+  const services = yield* Layer.buildWithMemoMap(
+    databaseLayer,
+    memoMap,
+    scope
+  )
+  
+  return ServiceMap.get(services, Database)
+})
+```
+
+**Signature:**
+```typescript
+interface MemoMap {
+  readonly getOrElseMemoize: <RIn, E, ROut>(
+    layer: Layer<ROut, E, RIn>,
+    scope: Scope,
+    build: (memoMap: MemoMap, scope: Scope) => Effect<ServiceMap<ROut>, E, RIn>
+  ) => Effect<ServiceMap<ROut>, E, RIn>
+}
+```
+
+### makeMemoMap
+
+Creates a new `MemoMap` for manual layer memoization.
+
+```typescript
+const memoMap: Effect.Effect<MemoMap> = Layer.makeMemoMap
+```
+
+**Signature:**
+```typescript
+const makeMemoMap: Effect.Effect<MemoMap>
+```
+
+### buildWithMemoMap
+
+Builds a layer using a specific `MemoMap` for memoization control.
+
+**Signature:**
+```typescript
+function buildWithMemoMap<RIn, E, ROut>(
+  self: Layer<ROut, E, RIn>,
+  memoMap: MemoMap,
+  scope: Scope
+): Effect.Effect<ServiceMap<ROut>, E, RIn>
+```
+
+## Type Utilities
+
+### Success
+
+Extracts the service output type from a Layer.
+
+```typescript
+type MyLayer = Layer<Database, Error, Config>
+type Output = Layer.Success<MyLayer> // Database
+```
+
+### Error
+
+Extracts the error type from a Layer.
+
+```typescript
+type MyLayer = Layer<Database, Error, Config>
+type ErrorType = Layer.Error<MyLayer> // Error
+```
+
+### Services
+
+Extracts the required services type from a Layer.
+
+```typescript
+type MyLayer = Layer<Database, Error, Config>
+type Required = Layer.Services<MyLayer> // Config
+```
+
+## Complete Example
+
+```typescript
+import { Effect, Layer, ServiceMap } from "effect"
+
+// Define services
+class Config extends ServiceMap.Service<Config, {
+  readonly apiUrl: string
+  readonly timeout: number
+}>()("Config") {}
+
+class Logger extends ServiceMap.Service<Logger, {
+  readonly log: (message: string) => Effect.Effect<void>
+}>()("Logger") {}
+
+class ApiClient extends ServiceMap.Service<ApiClient, {
+  readonly fetch: (path: string) => Effect.Effect<string>
+}>()("ApiClient") {}
+
+// Create layers
+const configLayer = Layer.succeed(Config)({
+  apiUrl: "https://api.example.com",
+  timeout: 5000
+})
+
+const loggerLayer = Layer.succeed(Logger)({
+  log: (message) => Effect.sync(() => console.log(`[LOG] ${message}`))
+})
+
+const apiClientLayer = Layer.effect(ApiClient)(
+  Effect.gen(function*() {
+    const config = yield* Config
+    const logger = yield* Logger
+    
+    return {
+      fetch: (path: string) =>
+        Effect.gen(function*() {
+          yield* logger.log(`Fetching ${path}`)
+          return `Data from ${config.apiUrl}${path}`
+        })
+    }
+  })
+)
+
+// Compose layers
+const appLayer = apiClientLayer.pipe(
+  Layer.provide(Layer.merge(configLayer, loggerLayer))
+)
+
+// Use the layer
+const program = Effect.gen(function*() {
+  const client = yield* ApiClient
+  const data = yield* client.fetch("/users")
+  return data
+}).pipe(Effect.provide(appLayer))
+
+Effect.runPromise(program).then(console.log)
+```

@@ -1,0 +1,333 @@
+---
+title: '@effect/atom-react'
+description: 'React bindings for Effect Atom modules'
+icon: 'atom'
+---
+
+React bindings for Effect's Atom modules, enabling reactive state management with Effects in React applications.
+
+## Installation
+
+```bash
+pnpm add @effect/atom-react react effect
+```
+
+## Overview
+
+Effect Atoms provide a reactive state management solution that seamlessly integrates Effect programs with React. Atoms represent pieces of state that can be read, written, and derived from other atoms.
+
+## Basic Usage
+
+### Creating Atoms
+
+Create a simple atom with an initial value:
+
+```tsx
+import { Atom } from "effect/unstable/reactivity"
+import { useAtomValue } from "@effect/atom-react"
+
+const countAtom = Atom.make(0)
+
+function Counter() {
+  const count = useAtomValue(countAtom)
+  return <div>Count: {count}</div>
+}
+```
+
+### Reading and Writing Atoms
+
+Use `useAtom` to both read and write atom values:
+
+```tsx
+import { Atom } from "effect/unstable/reactivity"
+import { useAtom } from "@effect/atom-react"
+
+const countAtom = Atom.make(0)
+
+function Counter() {
+  const [count, setCount] = useAtom(countAtom)
+  
+  return (
+    <div>
+      <div>Count: {count}</div>
+      <button onClick={() => setCount(count + 1)}>
+        Increment
+      </button>
+      <button onClick={() => setCount((prev) => prev + 1)}>
+        Increment (functional)
+      </button>
+    </div>
+  )
+}
+```
+
+## Derived Atoms
+
+Create atoms that derive their value from other atoms:
+
+```tsx
+import { Atom } from "effect/unstable/reactivity"
+import { useAtomValue } from "@effect/atom-react"
+
+const countAtom = Atom.make(0)
+const doubleCountAtom = Atom.map(countAtom, (n) => n * 2)
+
+function Display() {
+  const double = useAtomValue(doubleCountAtom)
+  return <div>Double: {double}</div>
+}
+```
+
+## Async Atoms
+
+Atoms can contain Effect programs for async operations:
+
+```tsx
+import { Effect } from "effect"
+import { Atom, AsyncResult } from "effect/unstable/reactivity"
+import { useAtomValue } from "@effect/atom-react"
+
+const userIdAtom = Atom.make(1)
+
+const userAtom = Atom.map(
+  userIdAtom,
+  (id) => Effect.promise(() =>
+    fetch(`https://api.example.com/users/${id}`).then(res => res.json())
+  )
+)
+
+function UserProfile() {
+  const user = useAtomValue(userAtom, AsyncResult.getOrThrow)
+  return <div>{user.name}</div>
+}
+```
+
+## Suspense Support
+
+Use `useAtomSuspense` for React Suspense integration:
+
+```tsx
+import { Suspense } from "react"
+import { Effect } from "effect"
+import { Atom } from "effect/unstable/reactivity"
+import { useAtomSuspense } from "@effect/atom-react"
+
+const dataAtom = Atom.make(
+  Effect.promise(() => fetch("/api/data").then(r => r.json()))
+)
+
+function Data() {
+  const data = useAtomSuspense(dataAtom)
+  return <div>{JSON.stringify(data)}</div>
+}
+
+function App() {
+  return (
+    <Suspense fallback={<div>Loading...</div>}>
+      <Data />
+    </Suspense>
+  )
+}
+```
+
+## Registry Provider
+
+Wrap your app with `RegistryProvider` to manage atom state:
+
+```tsx
+import { RegistryProvider } from "@effect/atom-react"
+
+function App() {
+  return (
+    <RegistryProvider>
+      <Counter />
+      <Display />
+    </RegistryProvider>
+  )
+}
+```
+
+## Initial Values
+
+Provide initial values for atoms:
+
+```tsx
+import { Atom } from "effect/unstable/reactivity"
+import { RegistryProvider } from "@effect/atom-react"
+
+const themeAtom = Atom.make("light")
+
+function App() {
+  return (
+    <RegistryProvider
+      initialValues={[
+        Atom.initialValue(themeAtom, "dark")
+      ]}
+    >
+      <YourApp />
+    </RegistryProvider>
+  )
+}
+```
+
+## Server-Side Rendering (SSR)
+
+### Hydration
+
+Support for React 18+ hydration:
+
+```tsx
+import { HydrationBoundary } from "@effect/atom-react"
+import { Atom } from "effect/unstable/reactivity"
+
+// On the server
+const dehydratedState = serializeAtomState(registry)
+
+// On the client
+function App({ dehydratedState }) {
+  return (
+    <HydrationBoundary state={dehydratedState}>
+      <YourApp />
+    </HydrationBoundary>
+  )
+}
+```
+
+## Scoped Atoms
+
+Create atoms with specific scopes:
+
+```tsx
+import { ScopedAtom } from "@effect/atom-react"
+import { Effect } from "effect"
+
+const scopedDataAtom = ScopedAtom.make(
+  Effect.acquireRelease(
+    Effect.sync(() => ({ data: "value" })),
+    () => Effect.log("Cleanup")
+  )
+)
+
+function Component() {
+  const data = useAtomValue(scopedDataAtom)
+  return <div>{data.data}</div>
+}
+```
+
+## Effect Integration
+
+Atoms work seamlessly with Effect's runtime and layers:
+
+```tsx
+import { Effect, Layer, ServiceMap } from "effect"
+import { Atom } from "effect/unstable/reactivity"
+import { useAtomValue } from "@effect/atom-react"
+
+class ApiService extends ServiceMap.Service("ApiService")<
+  ApiService,
+  { fetch: (url: string) => Effect.Effect<unknown> }
+>() {
+  static Live = Layer.succeed(ApiService, {
+    fetch: (url) => Effect.promise(() => fetch(url).then(r => r.json()))
+  })
+}
+
+const runtime = Atom.runtime(ApiService.Live)
+
+const dataAtom = runtime.atom(
+  ApiService.use((api) =>
+    api.fetch("/api/data")
+  )
+)
+
+function Data() {
+  const data = useAtomValue(dataAtom)
+  return <div>{JSON.stringify(data)}</div>
+}
+```
+
+## Atom Families
+
+Create parameterized atoms:
+
+```tsx
+import { Atom } from "effect/unstable/reactivity"
+import { useAtomValue } from "@effect/atom-react"
+
+const userAtomFamily = (userId: number) =>
+  Atom.make(
+    Effect.promise(() =>
+      fetch(`/api/users/${userId}`).then(r => r.json())
+    )
+  )
+
+function UserCard({ userId }: { userId: number }) {
+  const user = useAtomValue(userAtomFamily(userId))
+  return <div>{user.name}</div>
+}
+```
+
+## Hooks Reference
+
+### useAtomValue
+
+Read an atom's value:
+
+```tsx
+const value = useAtomValue(atom)
+const value = useAtomValue(atom, AsyncResult.getOrThrow)
+```
+
+### useAtom
+
+Read and write an atom:
+
+```tsx
+const [value, setValue] = useAtom(atom)
+const [value, setValue] = useAtom(atom, { mode: "promise" })
+```
+
+### useAtomSet
+
+Get only the setter function:
+
+```tsx
+const setValue = useAtomSet(atom)
+```
+
+### useAtomSuspense
+
+Use with React Suspense:
+
+```tsx
+const value = useAtomSuspense(atom)
+```
+
+### useAtomRef
+
+Use with AtomRef:
+
+```tsx
+const value = useAtomRef(atomRef)
+```
+
+## Best Practices
+
+1. **Atom Granularity**: Create small, focused atoms rather than large state objects
+2. **Derived State**: Use derived atoms instead of duplicating state
+3. **Async Operations**: Leverage AsyncResult for proper loading/error states
+4. **Registry Provider**: Always wrap your app with RegistryProvider
+5. **Error Boundaries**: Use React Error Boundaries with async atoms
+
+## API Modules
+
+- **Hooks**: React hooks for atoms (useAtom, useAtomValue, etc.)
+- **RegistryContext**: Registry context and provider
+- **ReactHydration**: SSR hydration support
+- **ScopedAtom**: Scoped atom utilities
+
+## Related Packages
+
+- [@effect/atom-solid](/packages/atom-solid)
+- [@effect/atom-vue](/packages/atom-vue)
+- [@effect/vitest](/packages/vitest)

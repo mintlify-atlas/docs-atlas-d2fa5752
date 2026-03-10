@@ -1,0 +1,241 @@
+---
+title: '@effect/ai-openai'
+description: 'OpenAI provider integration for Effect AI SDK'
+icon: 'brain-circuit'
+---
+
+An OpenAI provider integration that provides type-safe, Effect-based access to OpenAI's API, including completions, embeddings, streaming, and tool calling.
+
+## Installation
+
+```bash
+pnpm add @effect/ai-openai effect
+```
+
+## Setup
+
+Create an OpenAI client by providing your API key:
+
+```ts
+import { OpenAiClient } from "@effect/ai-openai"
+import { Effect, Layer, Redacted } from "effect"
+
+const OpenAiLive = OpenAiClient.layer({
+  apiKey: Redacted.make(process.env.OPENAI_API_KEY!)
+})
+```
+
+## Language Model
+
+Use the OpenAI language model for text generation:
+
+```ts
+import { OpenAiLanguageModel } from "@effect/ai-openai"
+import { Effect } from "effect"
+import { LanguageModel } from "effect/unstable/ai"
+
+const program = Effect.gen(function*() {
+  const result = yield* LanguageModel.generate({
+    prompt: "Explain quantum computing in simple terms"
+  })
+  console.log(result)
+}).pipe(
+  Effect.provide(OpenAiLanguageModel.model("gpt-4o")),
+  Effect.provide(OpenAiLive)
+)
+
+Effect.runPromise(program)
+```
+
+## Streaming Responses
+
+Stream responses for real-time text generation:
+
+```ts
+import { OpenAiLanguageModel } from "@effect/ai-openai"
+import { Effect, Stream } from "effect"
+import { LanguageModel } from "effect/unstable/ai"
+
+const program = Effect.gen(function*() {
+  const stream = yield* LanguageModel.streamText({
+    prompt: "Write a poem about the moon"
+  })
+  
+  yield* Stream.runForEach(stream, (chunk) =>
+    Effect.sync(() => process.stdout.write(chunk.text))
+  )
+}).pipe(
+  Effect.provide(OpenAiLanguageModel.model("gpt-4o")),
+  Effect.provide(OpenAiLive)
+)
+
+Effect.runPromise(program)
+```
+
+## Structured Output
+
+Generate structured data with JSON schema:
+
+```ts
+import { OpenAiLanguageModel } from "@effect/ai-openai"
+import { Effect, Schema } from "effect"
+import { LanguageModel } from "effect/unstable/ai"
+
+const PersonSchema = Schema.Struct({
+  name: Schema.String,
+  age: Schema.Number,
+  occupation: Schema.String
+})
+
+const program = Effect.gen(function*() {
+  const result = yield* LanguageModel.generateObject({
+    prompt: "Generate a person profile for a software engineer",
+    schema: PersonSchema
+  })
+  
+  console.log(result) // Typed as { name: string; age: number; occupation: string }
+}).pipe(
+  Effect.provide(OpenAiLanguageModel.model("gpt-4o")),
+  Effect.provide(OpenAiLive)
+)
+
+Effect.runPromise(program)
+```
+
+## Tool Calling
+
+Define and use custom tools:
+
+```ts
+import { OpenAiLanguageModel } from "@effect/ai-openai"
+import { Effect, Schema } from "effect"
+import { LanguageModel, Tool, Toolkit } from "effect/unstable/ai"
+
+const WeatherTool = Tool.make("GetWeather", {
+  description: "Get the current weather for a location",
+  parameters: Schema.Struct({
+    location: Schema.String,
+    unit: Schema.optional(Schema.Literal("celsius", "fahrenheit"))
+  }),
+  success: Schema.Struct({
+    temperature: Schema.Number,
+    condition: Schema.String
+  })
+})
+
+const program = Effect.gen(function*() {
+  const toolkit = Toolkit.make(WeatherTool)
+  const toolkitLayer = toolkit.toLayer({
+    GetWeather: ({ location, unit = "celsius" }) =>
+      Effect.succeed({
+        temperature: 22,
+        condition: "Sunny"
+      })
+  })
+  
+  const result = yield* LanguageModel.generate({
+    prompt: "What's the weather like in Paris?",
+    toolkit
+  })
+  
+  console.log(result)
+}).pipe(
+  Effect.provide(OpenAiLanguageModel.model("gpt-4o")),
+  Effect.provide(toolkitLayer),
+  Effect.provide(OpenAiLive)
+)
+
+Effect.runPromise(program)
+```
+
+## Native Tools
+
+OpenAI provides several native tools:
+
+- **OpenAiTool.CodeInterpreter**: Execute Python code in a sandbox
+- **OpenAiTool.FileSearch**: Search through uploaded files
+- **OpenAiTool.WebSearch**: Search the web for information
+
+```ts
+import { OpenAiLanguageModel, OpenAiTool } from "@effect/ai-openai"
+import { Effect } from "effect"
+import { LanguageModel, Toolkit } from "effect/unstable/ai"
+
+const program = Effect.gen(function*() {
+  const toolkit = Toolkit.make(OpenAiTool.CodeInterpreter)
+  
+  const result = yield* LanguageModel.generate({
+    prompt: "Calculate the fibonacci sequence up to 10 numbers",
+    toolkit
+  })
+  
+  console.log(result)
+}).pipe(
+  Effect.provide(OpenAiLanguageModel.model("gpt-4o")),
+  Effect.provide(OpenAiLive)
+)
+```
+
+## Error Handling
+
+Handle OpenAI-specific errors:
+
+```ts
+import { OpenAiError } from "@effect/ai-openai"
+import { Effect } from "effect"
+
+const program = Effect.gen(function*() {
+  // Your OpenAI API calls
+}).pipe(
+  Effect.catchTag("HttpClientError", (error) =>
+    Effect.sync(() => {
+      console.error("OpenAI API error:", error)
+      // Handle rate limits, invalid requests, etc.
+    })
+  )
+)
+```
+
+## Configuration
+
+Customize the OpenAI client:
+
+```ts
+import { OpenAiClient, OpenAiConfig } from "@effect/ai-openai"
+import { Redacted } from "effect"
+
+const config: OpenAiConfig.Config = {
+  apiKey: Redacted.make(process.env.OPENAI_API_KEY!),
+  baseUrl: "https://api.openai.com/v1", // Optional: custom base URL
+  organization: process.env.OPENAI_ORG_ID // Optional: organization ID
+}
+
+const OpenAiLive = OpenAiClient.layer(config)
+```
+
+## Telemetry
+
+Integrate with OpenTelemetry for observability:
+
+```ts
+import { OpenAiTelemetry } from "@effect/ai-openai"
+import { Effect } from "effect"
+
+// Telemetry attributes are automatically added to traces
+// when using the OpenAI client with OpenTelemetry integration
+```
+
+## API Modules
+
+- **OpenAiClient**: HTTP client for OpenAI API
+- **OpenAiConfig**: Configuration options
+- **OpenAiError**: Error type augmentation
+- **OpenAiLanguageModel**: Language model implementation
+- **OpenAiTelemetry**: OpenTelemetry integration
+- **OpenAiTool**: Provider-defined tools
+
+## Related Packages
+
+- [@effect/ai-anthropic](/packages/ai-anthropic)
+- [@effect/ai-openrouter](/packages/ai-openrouter)
+- [@effect/opentelemetry](/packages/opentelemetry)

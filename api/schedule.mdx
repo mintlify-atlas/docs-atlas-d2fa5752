@@ -1,0 +1,560 @@
+---
+title: Schedule
+description: Powerful retry and repeat strategies for Effect operations
+---
+
+The `Schedule` module provides utilities for creating and composing schedules for retrying operations, repeating effects, and implementing various timing strategies.
+
+A Schedule is a function that takes an input and returns a decision whether to continue or halt, along with a delay duration. Schedules can be combined, transformed, and used to implement sophisticated retry and repetition logic.
+
+## Overview
+
+Schedules are used with:
+- **`Effect.retry`** - Retry failed operations
+- **`Effect.repeat`** - Repeat successful operations
+- **`Effect.schedule`** - Schedule operations at intervals
+
+```ts
+import { Effect, Schedule } from "effect"
+
+// Retry with exponential backoff
+const retryPolicy = Schedule.exponential("100 millis", 2.0)
+  .pipe(Schedule.compose(Schedule.recurs(3)))
+
+const program = Effect.gen(function*() {
+  const result = yield* Effect.retry(
+    Effect.fail("Network error"),
+    retryPolicy
+  )
+})
+
+// Repeat on a fixed schedule
+const heartbeat = Effect.log("heartbeat")
+  .pipe(Effect.repeat(Schedule.spaced("30 seconds")))
+```
+
+## Basic Schedules
+
+### Fixed Interval
+
+Recur at fixed intervals.
+
+```ts
+import { Effect, Schedule } from "effect"
+
+// Every 5 seconds
+const every5Seconds = Schedule.spaced("5 seconds")
+
+Effect.repeat(
+  Effect.log("Tick"),
+  every5Seconds
+)
+```
+
+### Limited Recurrence
+
+Recur a specific number of times.
+
+```ts
+import { Schedule } from "effect"
+
+// Retry up to 5 times
+const maxRetries = Schedule.recurs(5)
+
+// Retry exactly once
+const retryOnce = Schedule.once
+```
+
+### Exponential Backoff
+
+Increase delay exponentially.
+
+```ts
+import { Schedule } from "effect"
+
+// Start at 100ms, double each time
+const exponential = Schedule.exponential("100 millis", 2.0)
+// 100ms, 200ms, 400ms, 800ms, ...
+
+// Start at 1 second, triple each time
+const aggressive = Schedule.exponential("1 second", 3.0)
+// 1s, 3s, 9s, 27s, ...
+```
+
+### Fibonacci Backoff
+
+Increase delay following Fibonacci sequence.
+
+```ts
+import { Schedule } from "effect"
+
+const fibonacci = Schedule.fibonacci("100 millis")
+// 100ms, 100ms, 200ms, 300ms, 500ms, 800ms, ...
+```
+
+### Duration-Based
+
+Recur once after a specific duration.
+
+```ts
+import { Schedule } from "effect"
+
+const afterDelay = Schedule.duration("5 seconds")
+// Recurs once after 5 seconds, then completes
+```
+
+## Combining Schedules
+
+### Both (Intersection)
+
+Continue only while both schedules want to continue.
+
+```ts
+import { Schedule } from "effect"
+
+// Retry with exponential backoff, but max 5 times
+const limitedBackoff = Schedule.both(
+  Schedule.exponential("100 millis"),
+  Schedule.recurs(5)
+)
+
+// Use maximum delay, stop when first exhausts
+const conservative = Schedule.both(
+  Schedule.spaced("1 second"),
+  Schedule.recurs(10)
+)
+```
+
+### Either (Union)
+
+Continue while either schedule wants to continue.
+
+```ts
+import { Schedule } from "effect"
+
+// Continue for 1 minute OR 20 attempts, whichever is longer
+const flexible = Schedule.either(
+  Schedule.spaced("3 seconds"),
+  Schedule.recurs(20)
+)
+```
+
+### Sequential Composition
+
+Run schedules in sequence.
+
+```ts
+import { Schedule } from "effect"
+
+// Fast retries first, then slow retries
+const phased = Schedule.andThen(
+  Schedule.exponential("100 millis").pipe(Schedule.take(3)),
+  Schedule.spaced("5 seconds").pipe(Schedule.take(5))
+)
+```
+
+## Schedule Transformations
+
+### Limiting Duration
+
+```ts
+import { Schedule } from "effect"
+
+// Retry for up to 30 seconds total
+const timeBound = Schedule.exponential("100 millis")
+  .pipe(Schedule.upTo("30 seconds"))
+
+// Retry while under 1 minute elapsed
+const whileUnder = Schedule.spaced("5 seconds")
+  .pipe(Schedule.whileInput(({ elapsed }) => elapsed < 60000))
+```
+
+### Limiting Attempts
+
+```ts
+import { Schedule } from "effect"
+
+// Take only first 5 recurrences
+const limited = Schedule.exponential("100 millis")
+  .pipe(Schedule.take(5))
+```
+
+### Adding Jitter
+
+Add randomness to delays.
+
+```ts
+import { Schedule } from "effect"
+
+// Add random jitter (0-100% of original delay)
+const jittered = Schedule.exponential("100 millis")
+  .pipe(Schedule.jittered)
+
+// Custom jitter factor (0.0 to 1.0)
+const customJitter = Schedule.exponential("100 millis")
+  .pipe(Schedule.jittered(0.5)) // ±50% jitter
+```
+
+### Conditional Schedules
+
+```ts
+import { Effect, Schedule } from "effect"
+
+// Only retry certain errors
+const retryableOnly = Schedule.exponential("200 millis")
+  .pipe(
+    Schedule.setInputType<{ retryable: boolean }>(),
+    Schedule.while(({ input }) => input.retryable)
+  )
+
+// Retry until success or max attempts
+const whileError = Schedule.exponential("100 millis")
+  .pipe(
+    Schedule.whileInput((error) => error.status >= 500)
+  )
+```
+
+## Modifying Delays
+
+### Adding Delays
+
+```ts
+import { Duration, Effect, Schedule } from "effect"
+
+// Add fixed delay to each recurrence
+const withExtraDelay = Schedule.exponential("100 millis")
+  .pipe(
+    Schedule.addDelay(() => Effect.succeed(Duration.millis(50)))
+  )
+
+// Add random jitter
+const withJitter = Schedule.exponential("100 millis")
+  .pipe(
+    Schedule.addDelay(() => 
+      Effect.succeed(Duration.millis(Math.random() * 100))
+    )
+  )
+```
+
+### Modifying Delays
+
+```ts
+import { Duration, Effect, Schedule } from "effect"
+
+// Cap maximum delay
+const capped = Schedule.exponential("100 millis")
+  .pipe(
+    Schedule.modifyDelay((_, delay) =>
+      Effect.succeed(Duration.min(delay, Duration.seconds(10)))
+    )
+  )
+```
+
+## Collecting Outputs
+
+### Collect All Outputs
+
+```ts
+import { Effect, Schedule } from "effect"
+
+const collectAll = Schedule.collectOutputs(
+  Schedule.recurs(5)
+)
+
+const results = Effect.repeat(
+  Effect.succeed(Math.random()),
+  collectAll
+)
+// Returns array of all outputs: [0, 1, 2, 3, 4, 5]
+```
+
+### Collect Inputs
+
+```ts
+import { Effect, Schedule } from "effect"
+
+const collectInputs = Schedule.collectInputs(
+  Schedule.spaced("1 second")
+)
+
+let counter = 0
+const program = Effect.repeat(
+  Effect.sync(() => `result-${++counter}`),
+  collectInputs.pipe(Schedule.take(3))
+)
+// Returns array of all inputs
+```
+
+### Conditional Collection
+
+```ts
+import { Effect, Schedule } from "effect"
+
+// Collect while under time limit
+const timedCollection = Schedule.collectWhile(
+  Schedule.spaced("500 millis"),
+  (metadata) => Effect.succeed(metadata.elapsed < 3000)
+)
+```
+
+## Cron Schedules
+
+Schedule based on cron expressions.
+
+```ts
+import { Effect, Schedule } from "effect"
+
+// Every minute
+const everyMinute = Schedule.cron("* * * * *")
+
+// Every day at 2:30 AM
+const dailyBackup = Schedule.cron("30 2 * * *")
+
+// Every Monday at 9 AM (with timezone)
+const weeklyReport = Schedule.cron("0 9 * * 1", "America/New_York")
+
+// Every 15 minutes during business hours
+const businessHours = Schedule.cron("0,15,30,45 9-17 * * 1-5")
+
+Effect.repeat(
+  Effect.log("Scheduled task"),
+  everyMinute
+)
+```
+
+## Tapping and Effects
+
+### Tap Output
+
+Perform side effects on outputs.
+
+```ts
+import { Console, Effect, Schedule } from "effect"
+
+const logged = Schedule.exponential("100 millis")
+  .pipe(
+    Schedule.tapOutput((delay) =>
+      Console.log(`Next retry in ${delay}`)
+    )
+  )
+```
+
+### Tap Input
+
+Perform side effects on inputs.
+
+```ts
+import { Console, Effect, Schedule } from "effect"
+
+const logErrors = Schedule.exponential("200 millis")
+  .pipe(
+    Schedule.setInputType<Error>(),
+    Schedule.tapInput((error) =>
+      Console.log(`Retrying after error: ${error.message}`)
+    )
+  )
+```
+
+## Production Patterns
+
+### Capped Exponential with Jitter
+
+```ts
+import { Schedule } from "effect"
+
+// Production-ready retry schedule
+const productionRetry = Schedule.exponential("250 millis")
+  .pipe(
+    // Cap at 10 seconds
+    Schedule.either(Schedule.spaced("10 seconds")),
+    // Add jitter
+    Schedule.jittered,
+    // Max 10 attempts
+    Schedule.compose(Schedule.recurs(10))
+  )
+```
+
+### Retry with Conditional Logic
+
+```ts
+import { Schedule } from "effect"
+
+interface HttpError {
+  status: number
+  retryable: boolean
+}
+
+const smartRetry = Schedule.exponential("250 millis")
+  .pipe(
+    Schedule.either(Schedule.spaced("10 seconds")),
+    Schedule.jittered,
+    Schedule.setInputType<HttpError>(),
+    Schedule.while(({ input }) => input.retryable),
+    Schedule.compose(Schedule.recurs(6))
+  )
+```
+
+### Phased Retry Strategy
+
+```ts
+import { Schedule } from "effect"
+
+// Quick retries, then slow retries
+const phased = Schedule.andThen(
+  // Fast phase: 3 quick retries
+  Schedule.exponential("100 millis").pipe(Schedule.take(3)),
+  // Slow phase: 3 slower retries
+  Schedule.exponential("2 seconds").pipe(Schedule.take(3))
+)
+```
+
+## Using Schedules
+
+### With Effect.retry
+
+```ts
+import { Data, Effect, Schedule } from "effect"
+
+class ApiError extends Data.TaggedError("ApiError")<{
+  message: string
+  status: number
+}> {}
+
+const fetchData = Effect.gen(function*() {
+  // Simulated API call that might fail
+  if (Math.random() > 0.7) {
+    return { data: "success" }
+  }
+  return yield* new ApiError({ message: "Network error", status: 500 })
+})
+
+const withRetry = fetchData.pipe(
+  Effect.retry(Schedule.exponential("100 millis").pipe(
+    Schedule.compose(Schedule.recurs(5))
+  ))
+)
+```
+
+### With Effect.repeat
+
+```ts
+import { Console, Effect, Schedule } from "effect"
+
+const task = Console.log("Heartbeat")
+
+// Repeat every 30 seconds
+const repeated = Effect.repeat(
+  task,
+  Schedule.spaced("30 seconds")
+)
+
+// Repeat 10 times with delay
+const limited = Effect.repeat(
+  task,
+  Schedule.spaced("5 seconds").pipe(Schedule.take(10))
+)
+```
+
+### Schedule Builder Helper
+
+```ts
+import { Effect, Schedule } from "effect"
+
+interface MyError {
+  retryable: boolean
+}
+
+const effect = Effect.fail({ retryable: true })
+
+// Type-safe schedule builder
+const result = effect.pipe(
+  Effect.retry(($) =>
+    $(Schedule.spaced("1 seconds")).pipe(
+      Schedule.while(({ input }) => input.retryable)
+    )
+  )
+)
+```
+
+## Working with Metadata
+
+```ts
+import { Effect, Schedule } from "effect"
+
+const metadataAware = Schedule.spaced("1 second")
+  .pipe(
+    Schedule.collectWhile((metadata) =>
+      Effect.succeed(
+        metadata.attempt <= 5 &&
+        metadata.elapsed < 10000
+      )
+    )
+  )
+```
+
+## Advanced: Custom Schedules
+
+### Using unfold
+
+```ts
+import { Effect, Schedule } from "effect"
+
+// Custom schedule that increases delay
+const custom = Schedule.unfold(100, (delay) =>
+  Effect.succeed(delay * 1.5)
+)
+```
+
+### Using fromStep
+
+```ts
+import { Duration, Effect, Schedule } from "effect"
+
+// Advanced: create schedule from step function
+const advanced = Schedule.fromStep(
+  Effect.sync(() => {
+    let count = 0
+    return (now, input) => {
+      count++
+      const delay = Duration.millis(count * 100)
+      return Effect.succeed([count, delay])
+    }
+  })
+)
+```
+
+## API Types
+
+```ts
+interface Schedule<Output, Input, Error, Env> {
+  // Variance markers
+  readonly [TypeId]: {
+    readonly _Out: Covariant<Output>
+    readonly _In: Contravariant<Input>
+    readonly _Error: Covariant<Error>
+    readonly _Env: Covariant<Env>
+  }
+}
+
+interface InputMetadata<Input> {
+  readonly input: Input
+  readonly attempt: number
+  readonly start: number
+  readonly now: number
+  readonly elapsed: number
+  readonly elapsedSincePrevious: number
+}
+
+interface Metadata<Output, Input> extends InputMetadata<Input> {
+  readonly output: Output
+  readonly duration: Duration.Duration
+}
+```
+
+## Related
+
+- [Duration](./duration) - Working with time spans
+- [Clock](./clock) - System time and delays
+- [Cron](./cron) - Cron expression support
+- [Effect Retry](../guides/retrying) - Retry patterns
+- [Effect Repeat](../guides/repeating) - Repeat patterns

@@ -1,0 +1,255 @@
+---
+title: Running Effects
+description: Learn how to run Effect programs using NodeRuntime, BunRuntime, Layer.launch, and ManagedRuntime
+---
+
+Effect programs are lazy by default—they describe computations but don't execute until you explicitly run them. This guide covers the different ways to run Effect programs in production and how to integrate them with existing codebases.
+
+## Entry Points with Runtime
+
+The most common way to run an Effect program is using `NodeRuntime.runMain` or `BunRuntime.runMain` at your application entry point.
+
+### NodeRuntime.runMain
+
+`NodeRuntime.runMain` is designed for Node.js applications. It automatically installs signal handlers (SIGINT/SIGTERM) for graceful shutdown and interrupts running fibers when the process receives a termination signal.
+
+```typescript
+import { NodeRuntime } from "@effect/platform-node"
+import { Effect, Layer } from "effect"
+
+const Worker = Layer.effectDiscard(Effect.gen(function*() {
+  yield* Effect.logInfo("Starting worker...")
+  yield* Effect.forkScoped(Effect.gen(function*() {
+    while (true) {
+      yield* Effect.logInfo("Working...")
+      yield* Effect.sleep("1 second")
+    }
+  }))
+}))
+
+const program = Layer.launch(Worker)
+
+// runMain installs SIGINT / SIGTERM handlers and interrupts running fibers
+// for graceful shutdown.
+NodeRuntime.runMain(program, {
+  // Disable automatic error reporting if your app already centralizes it.
+  disableErrorReporting: true
+})
+```
+
+### BunRuntime.runMain
+
+Bun applications use `BunRuntime.runMain`, which has the same API shape as `NodeRuntime.runMain`:
+
+```typescript
+import { BunRuntime } from "@effect/platform-bun"
+import { Effect, Layer } from "effect"
+
+const program = Layer.launch(Worker)
+
+BunRuntime.runMain(program, { 
+  disableErrorReporting: true 
+})
+```
+
+## Layer.launch for Long-Running Applications
+
+When your entire application is composed of layers (HTTP servers, background workers, database connections), use `Layer.launch` to convert the layer into a long-running Effect program.
+
+```typescript
+import { NodeHttpServer, NodeRuntime } from "@effect/platform-node"
+import { Effect, Layer } from "effect"
+import { HttpRouter, HttpServerResponse } from "effect/unstable/http"
+import { createServer } from "node:http"
+
+// Build a tiny HTTP app with a health-check endpoint.
+export const HealthRoutes = HttpRouter.use(Effect.fn(function*(router) {
+  yield* router.add("GET", "/health", Effect.succeed(HttpServerResponse.text("ok")))
+  yield* router.add("GET", "/healthz", Effect.succeed(HttpServerResponse.text("ok")))
+}))
+
+// Turn the routes into a server layer and provide the Node HTTP server backend.
+export const HttpServerLive = HttpRouter.serve(HealthRoutes).pipe(
+  Layer.provide(NodeHttpServer.layer(createServer, { port: 3000 }))
+)
+
+// Layer.launch converts the layer into a long-running Effect<never>.
+export const main = Layer.launch(HttpServerLive)
+
+// This entrypoint pattern works well when the whole app is represented as
+// layers (for example: HTTP server + background workers).
+NodeRuntime.runMain(main)
+```
+
+This pattern is ideal when:
+- Your app is entirely composed of layers
+- You need multiple long-running services (HTTP server + workers)
+- All services share common dependencies
+
+## ManagedRuntime for Framework Integration
+
+`ManagedRuntime` bridges Effect programs with non-Effect code. Create one runtime from your application layer, then use it anywhere you need imperative execution—web handlers, framework hooks, worker queues, or legacy callback APIs.
+
+```typescript
+import { Effect, Layer, ManagedRuntime, Schema, ServiceMap } from "effect"
+import { Hono } from "hono"
+
+class Todo extends Schema.Class<Todo>("Todo")({
+  id: Schema.Number,
+  title: Schema.String,
+  completed: Schema.Boolean
+}) {}
+
+class TodoNotFound extends Schema.TaggedErrorClass<TodoNotFound>()("TodoNotFound", {
+  id: Schema.Number
+}) {}
+
+export class TodoRepo extends ServiceMap.Service<TodoRepo, {
+  readonly getAll: Effect.Effect<ReadonlyArray<Todo>>
+  getById(id: number): Effect.Effect<Todo, TodoNotFound>
+}>()("app/TodoRepo") {
+  static readonly layer = Layer.effect(
+    TodoRepo,
+    Effect.gen(function*() {
+      const store = new Map<number, Todo>()
+      
+      const getAll = Effect.gen(function*() {
+        return Array.from(store.values())
+      }).pipe(
+        Effect.withSpan("TodoRepo.getAll")
+      )
+      
+      const getById = Effect.fn("TodoRepo.getById")(function*(id: number) {
+        const todo = store.get(id)
+        if (todo === undefined) {
+          return yield* new TodoNotFound({ id })
+        }
+        return todo
+      })
+      
+      return TodoRepo.of({ getAll, getById })
+    })
+  )
+}
+
+// Create a global memo map that can be shared across the app.
+export const appMemoMap = Layer.makeMemoMapUnsafe()
+
+// Create a ManagedRuntime for the TodoRepo layer.
+export const runtime = ManagedRuntime.make(TodoRepo.layer, {
+  memoMap: appMemoMap
+})
+
+export const app = new Hono()
+
+app.get("/todos", async (context) => {
+  const todos = await runtime.runPromise(
+    TodoRepo.use((repo) => repo.getAll)
+  )
+  return context.json(todos)
+})
+
+app.get("/todos/:id", async (context) => {
+  const id = Number(context.req.param("id"))
+  if (!Number.isFinite(id)) {
+    return context.json({ message: "Todo id must be a number" }, 400)
+  }
+  
+  const todo = await runtime.runPromise(
+    TodoRepo.use((repo) => repo.getById(id)).pipe(
+      Effect.catchTag("TodoNotFound", () => Effect.succeed(null))
+    )
+  )
+  
+  if (todo === null) {
+    return context.json({ message: "Todo not found" }, 404)
+  }
+  
+  return context.json(todo)
+})
+```
+
+### Cleanup on Shutdown
+
+When using `ManagedRuntime`, ensure you dispose of it on shutdown to clean up resources:
+
+```typescript
+const shutdown = () => {
+  void runtime.dispose()
+}
+
+process.once("SIGINT", shutdown)
+process.once("SIGTERM", shutdown)
+```
+
+### Runtime Execution Methods
+
+`ManagedRuntime` provides multiple execution methods:
+
+- `runtime.runPromise()` - Returns a Promise (for async contexts)
+- `runtime.runSync()` - Synchronous execution (for synchronous edges)
+- `runtime.runCallback()` - Callback-based execution (for legacy APIs)
+- `runtime.runFork()` - Returns a Fiber for manual control
+
+## Choosing the Right Approach
+
+<AccordionGroup>
+  <Accordion title="NodeRuntime.runMain / BunRuntime.runMain">
+    Use when:
+    - Building a standalone Effect application
+    - You control the entire process lifecycle
+    - You need graceful shutdown handling
+    
+    **Example**: CLI tools, microservices, worker processes
+  </Accordion>
+  
+  <Accordion title="Layer.launch">
+    Use when:
+    - Your app is entirely composed of layers
+    - Running multiple long-lived services
+    - All components share dependencies
+    
+    **Example**: HTTP server + background workers + database connections
+  </Accordion>
+  
+  <Accordion title="ManagedRuntime">
+    Use when:
+    - Integrating Effect into existing frameworks
+    - Bridging Effect with non-Effect code
+    - Need imperative execution in callbacks/handlers
+    
+    **Example**: Express/Hono/Fastify apps, Next.js API routes, event handlers
+  </Accordion>
+</AccordionGroup>
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Single Runtime" icon="circle-1">
+    Create one `ManagedRuntime` per application and reuse it across handlers. Don't create new runtimes per request.
+  </Card>
+  
+  <Card title="Memo Map" icon="circle-2">
+    Always provide a shared `memoMap` to `ManagedRuntime.make` for proper memoization across the app.
+  </Card>
+  
+  <Card title="Error Handling" icon="circle-3">
+    Disable `disableErrorReporting` if you have centralized error handling. Otherwise, errors are logged automatically.
+  </Card>
+  
+  <Card title="Resource Cleanup" icon="circle-4">
+    Always call `runtime.dispose()` on shutdown when using `ManagedRuntime` to properly clean up resources.
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Testing" icon="flask" href="/guides/testing">
+    Learn how to test Effect programs with @effect/vitest
+  </Card>
+  
+  <Card title="Observability" icon="chart-line" href="/guides/observability">
+    Add logging, tracing, and metrics to your applications
+  </Card>
+</CardGroup>

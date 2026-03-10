@@ -1,80 +1,492 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: Quick Start
+description: Build your first Effect application in minutes
 ---
 
-## Get started in three steps
+This guide walks you through creating a complete Effect application that demonstrates the core concepts: Effects, services, layers, and error handling.
 
-Get your documentation site running locally and make your first customization.
+## What You'll Build
 
-### Step 1: Set up your local environment
+You'll create a user management service that:
+- Fetches user data with type-safe error handling
+- Uses dependency injection with services and layers
+- Implements structured logging
+- Demonstrates Effect's generator syntax
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+## Prerequisites
 
-### Step 2: Deploy your changes
+Make sure you've [installed Effect](/installation) and have a TypeScript project set up.
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
+## Building the Application
+
+<Steps>
+  <Step title="Define custom errors">
+    First, create typed errors using `Schema.TaggedErrorClass`. This makes errors part of your type signatures:
+
+    ```typescript index.ts
+    import { Effect, Schema } from "effect"
+
+    // Define a custom error for when a user is not found
+    export class UserNotFoundError extends Schema.TaggedErrorClass<UserNotFoundError>()("UserNotFoundError", {
+      userId: Schema.Number
+    }) {}
+
+    // Define a custom error for database issues
+    export class DatabaseError extends Schema.TaggedErrorClass<DatabaseError>()("DatabaseError", {
+      message: Schema.String,
+      cause: Schema.Defect
+    }) {}
+    ```
+
+    <Note>
+      `Schema.TaggedErrorClass` creates serializable error types that work seamlessly with Effect's error handling.
+    </Note>
+  </Step>
+
+  <Step title="Create a service">
+    Services encapsulate your application's capabilities. Define a `UserRepository` service:
+
+    ```typescript index.ts
+    import { Effect, Layer, ServiceMap } from "effect"
+
+    // Define a User type
+    interface User {
+      readonly id: number
+      readonly name: string
+      readonly email: string
+    }
+
+    // Create the UserRepository service
+    export class UserRepository extends ServiceMap.Service<UserRepository, {
+      findById(id: number): Effect.Effect<User, UserNotFoundError | DatabaseError>
+      list(): Effect.Effect<Array<User>, DatabaseError>
+    }>()("quickstart/UserRepository") {
+      // Define the service implementation as a Layer
+      static readonly layer = Layer.effect(
+        UserRepository,
+        Effect.gen(function*() {
+          // Simulate a database with in-memory data
+          const users: Map<number, User> = new Map([
+            [1, { id: 1, name: "Alice", email: "alice@example.com" }],
+            [2, { id: 2, name: "Bob", email: "bob@example.com" }],
+            [3, { id: 3, name: "Charlie", email: "charlie@example.com" }]
+          ])
+
+          // Implement the findById method
+          const findById = Effect.fn("UserRepository.findById")(
+            function*(id: number): Effect.fn.Return<User, UserNotFoundError | DatabaseError> {
+              yield* Effect.log("Looking up user", id)
+              
+              const user = users.get(id)
+              if (!user) {
+                return yield* new UserNotFoundError({ userId: id })
+              }
+              
+              return user
+            }
+          )
+
+          // Implement the list method
+          const list = Effect.fn("UserRepository.list")(
+            function*(): Effect.fn.Return<Array<User>, DatabaseError> {
+              yield* Effect.log("Fetching all users")
+              return Array.from(users.values())
+            }
+          )
+
+          // Return the service implementation
+          return UserRepository.of({ findById, list })
+        })
+      )
+    }
+    ```
+
+    <Note>
+      `Effect.fn` is used to define functions that return Effects. It provides better stack traces and automatic tracing.
+    </Note>
+  </Step>
+
+  <Step title="Write application logic">
+    Now create your main program that uses the service:
+
+    ```typescript index.ts
+    // Create a program that fetches and displays a user
+    const getUserDetails = Effect.fn("getUserDetails")(
+      function*(userId: number) {
+        // Access the UserRepository service
+        const userRepo = yield* UserRepository
+        
+        yield* Effect.log("Starting user lookup")
+        
+        // Fetch the user (this can fail with UserNotFoundError or DatabaseError)
+        const user = yield* userRepo.findById(userId)
+        
+        yield* Effect.log("User found:", user.name)
+        
+        return `User: ${user.name} (${user.email})`
+      }
+    )
+
+    // Create a program that lists all users
+    const listAllUsers = Effect.gen(function*() {
+      const userRepo = yield* UserRepository
+      
+      yield* Effect.log("Fetching user list")
+      
+      const users = yield* userRepo.list()
+      
+      yield* Effect.log(`Found ${users.length} users`)
+      
+      return users
+    })
+    ```
+  </Step>
+
+  <Step title="Add error handling">
+    Handle errors gracefully with Effect's error handling combinators:
+
+    ```typescript index.ts
+    // Handle errors and provide fallback behavior
+    const safeGetUserDetails = getUserDetails(1).pipe(
+      // Catch specific error types
+      Effect.catchTag("UserNotFoundError", (error) => {
+        return Effect.gen(function*() {
+          yield* Effect.logWarning("User not found:", error.userId)
+          return "User not found"
+        })
+      }),
+      // Catch database errors
+      Effect.catchTag("DatabaseError", (error) => {
+        return Effect.gen(function*() {
+          yield* Effect.logError("Database error:", error.message)
+          return "Service temporarily unavailable"
+        })
+      })
+    )
+    ```
+
+    <Note>
+      `Effect.catchTag` lets you handle specific error types. The error type is removed from the signature after handling.
+    </Note>
+  </Step>
+
+  <Step title="Compose the full program">
+    Combine everything into a main program:
+
+    ```typescript index.ts
+    const program = Effect.gen(function*() {
+      yield* Effect.log("=== User Management System ===")
+      
+      // Get a specific user
+      const userDetails = yield* safeGetUserDetails
+      yield* Effect.log("Result:", userDetails)
+      
+      // List all users
+      const allUsers = yield* listAllUsers
+      yield* Effect.log("Total users:", allUsers.length)
+      
+      // Try to get a non-existent user
+      const notFound = yield* getUserDetails(999).pipe(
+        Effect.catchTag("UserNotFoundError", () => 
+          Effect.succeed("User does not exist")
+        )
+      )
+      yield* Effect.log("Not found result:", notFound)
+      
+      return "Program completed successfully"
+    })
+    ```
+  </Step>
+
+  <Step title="Provide dependencies and run">
+    Finally, provide the service implementation and run the program:
+
+    ```typescript index.ts
+    // Provide the UserRepository implementation
+    const runnable = program.pipe(
+      Effect.provide(UserRepository.layer)
+    )
+
+    // Run the program
+    Effect.runPromise(runnable).then(
+      (result) => console.log("\nFinal result:", result),
+      (error) => console.error("Program failed:", error)
+    )
+    ```
+
+    <Note>
+      `Effect.provide` injects the service implementation. `Effect.runPromise` executes the Effect and returns a Promise.
+    </Note>
+  </Step>
+
+  <Step title="Run your application">
+    Execute your program:
+
+    ```bash
+    npx tsx index.ts
+    ```
+
+    You should see output like:
+
+    ```
+    timestamp=... level=INFO fiber=#0 message="=== User Management System ==="
+    timestamp=... level=INFO fiber=#0 message="Starting user lookup"
+    timestamp=... level=INFO fiber=#0 message="Looking up user" message=1
+    timestamp=... level=INFO fiber=#0 message="User found:" message=Alice
+    timestamp=... level=INFO fiber=#0 message=Result: message="User: Alice (alice@example.com)"
+    timestamp=... level=INFO fiber=#0 message="Fetching user list"
+    timestamp=... level=INFO fiber=#0 message="Fetching all users"
+    timestamp=... level=INFO fiber=#0 message="Found 3 users"
+    timestamp=... level=INFO fiber=#0 message="Total users:" message=3
+    ...
+
+    Final result: Program completed successfully
+    ```
+  </Step>
+</Steps>
+
+## Complete Example
+
+Here's the full code in one place:
+
+<Accordion title="View complete example">
+
+```typescript index.ts
+import { Effect, Layer, Schema, ServiceMap } from "effect"
+
+// Define custom errors
+export class UserNotFoundError extends Schema.TaggedErrorClass<UserNotFoundError>()("UserNotFoundError", {
+  userId: Schema.Number
+}) {}
+
+export class DatabaseError extends Schema.TaggedErrorClass<DatabaseError>()("DatabaseError", {
+  message: Schema.String,
+  cause: Schema.Defect
+}) {}
+
+// Define User type
+interface User {
+  readonly id: number
+  readonly name: string
+  readonly email: string
+}
+
+// Create UserRepository service
+export class UserRepository extends ServiceMap.Service<UserRepository, {
+  findById(id: number): Effect.Effect<User, UserNotFoundError | DatabaseError>
+  list(): Effect.Effect<Array<User>, DatabaseError>
+}>()("quickstart/UserRepository") {
+  static readonly layer = Layer.effect(
+    UserRepository,
+    Effect.gen(function*() {
+      const users: Map<number, User> = new Map([
+        [1, { id: 1, name: "Alice", email: "alice@example.com" }],
+        [2, { id: 2, name: "Bob", email: "bob@example.com" }],
+        [3, { id: 3, name: "Charlie", email: "charlie@example.com" }]
+      ])
+
+      const findById = Effect.fn("UserRepository.findById")(
+        function*(id: number): Effect.fn.Return<User, UserNotFoundError | DatabaseError> {
+          yield* Effect.log("Looking up user", id)
+          const user = users.get(id)
+          if (!user) {
+            return yield* new UserNotFoundError({ userId: id })
+          }
+          return user
+        }
+      )
+
+      const list = Effect.fn("UserRepository.list")(
+        function*(): Effect.fn.Return<Array<User>, DatabaseError> {
+          yield* Effect.log("Fetching all users")
+          return Array.from(users.values())
+        }
+      )
+
+      return UserRepository.of({ findById, list })
+    })
+  )
+}
+
+// Application logic
+const getUserDetails = Effect.fn("getUserDetails")(
+  function*(userId: number) {
+    const userRepo = yield* UserRepository
+    yield* Effect.log("Starting user lookup")
+    const user = yield* userRepo.findById(userId)
+    yield* Effect.log("User found:", user.name)
+    return `User: ${user.name} (${user.email})`
+  }
+)
+
+const listAllUsers = Effect.gen(function*() {
+  const userRepo = yield* UserRepository
+  yield* Effect.log("Fetching user list")
+  const users = yield* userRepo.list()
+  yield* Effect.log(`Found ${users.length} users`)
+  return users
+})
+
+// Error handling
+const safeGetUserDetails = getUserDetails(1).pipe(
+  Effect.catchTag("UserNotFoundError", (error) => {
+    return Effect.gen(function*() {
+      yield* Effect.logWarning("User not found:", error.userId)
+      return "User not found"
+    })
+  }),
+  Effect.catchTag("DatabaseError", (error) => {
+    return Effect.gen(function*() {
+      yield* Effect.logError("Database error:", error.message)
+      return "Service temporarily unavailable"
+    })
+  })
+)
+
+// Main program
+const program = Effect.gen(function*() {
+  yield* Effect.log("=== User Management System ===")
+  
+  const userDetails = yield* safeGetUserDetails
+  yield* Effect.log("Result:", userDetails)
+  
+  const allUsers = yield* listAllUsers
+  yield* Effect.log("Total users:", allUsers.length)
+  
+  const notFound = yield* getUserDetails(999).pipe(
+    Effect.catchTag("UserNotFoundError", () => 
+      Effect.succeed("User does not exist")
+    )
+  )
+  yield* Effect.log("Not found result:", notFound)
+  
+  return "Program completed successfully"
+})
+
+// Run the program
+const runnable = program.pipe(Effect.provide(UserRepository.layer))
+
+Effect.runPromise(runnable).then(
+  (result) => console.log("\nFinal result:", result),
+  (error) => console.error("Program failed:", error)
+)
+```
+
 </Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+## Key Concepts Demonstrated
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 3: Go live
-
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
-
-## Next steps
-
-Now that you have your docs running, explore these key features:
+This example showcases several important Effect patterns:
 
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="Effect.gen & Effect.fn" icon="code">
+    Use generator functions for imperative-style code with `yield*` to unwrap Effects.
+  </Card>
+  
+  <Card title="Services & Layers" icon="layer-group">
+    Define services with `ServiceMap.Service` and provide implementations with `Layer.effect`.
+  </Card>
+  
+  <Card title="Tagged Errors" icon="tag">
+    Create type-safe errors with `Schema.TaggedErrorClass` and handle them with `Effect.catchTag`.
+  </Card>
+  
+  <Card title="Dependency Injection" icon="plug">
+    Use `Effect.provide` to inject service implementations, making code testable and modular.
+  </Card>
 </CardGroup>
 
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>
+## What's Next?
+
+Now that you've built your first Effect application, explore more advanced topics:
+
+<CardGroup cols={2}>
+  <Card title="Core Concepts" icon="book" href="/concepts/effect">
+    Deep dive into the Effect type and its capabilities
+  </Card>
+  
+  <Card title="Services & Layers" icon="layer-group" href="/concepts/services">
+    Master dependency injection and service composition
+  </Card>
+  
+  <Card title="Error Handling" icon="exclamation-triangle" href="/concepts/error-handling">
+    Learn advanced error handling patterns
+  </Card>
+  
+  <Card title="Testing" icon="flask" href="/guides/testing">
+    Write tests for your Effect applications
+  </Card>
+</CardGroup>
+
+## Common Patterns
+
+### Running in Node.js with NodeRuntime
+
+For production applications, use `NodeRuntime.runMain` instead of `Effect.runPromise`:
+
+```typescript
+import { NodeRuntime } from "@effect/platform-node"
+
+NodeRuntime.runMain(runnable)
+```
+
+This sets up proper signal handling for graceful shutdown.
+
+### Creating Effects from Promises
+
+Wrap existing Promise-based APIs:
+
+```typescript
+import { Effect } from "effect"
+
+const fetchData = Effect.tryPromise({
+  async try() {
+    const response = await fetch("https://api.example.com/data")
+    return await response.json()
+  },
+  catch: (error) => new DatabaseError({ 
+    message: "Failed to fetch", 
+    cause: error 
+  })
+})
+```
+
+### Testing with Mock Services
+
+Replace real implementations with test doubles:
+
+```typescript
+import { Layer } from "effect"
+
+const TestUserRepository = Layer.effect(
+  UserRepository,
+  Effect.succeed(
+    UserRepository.of({
+      findById: () => Effect.succeed({ 
+        id: 1, 
+        name: "Test User", 
+        email: "test@example.com" 
+      }),
+      list: () => Effect.succeed([])
+    })
+  )
+)
+
+const testRunnable = program.pipe(Effect.provide(TestUserRepository))
+```
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Type errors with yield*">
+    Make sure you're using `yield*` (with asterisk) to unwrap Effects, not just `yield`. The asterisk is required for TypeScript to infer types correctly.
+  </Accordion>
+
+  <Accordion title="Service not found errors">
+    If you get runtime errors about missing services, ensure you've called `Effect.provide()` with all required service layers before running the program.
+  </Accordion>
+
+  <Accordion title="Error handling doesn't work">
+    Remember that `Effect.catchTag` only catches errors that are in the Effect's error channel. Use the correct error tag name (must match the first parameter to `TaggedErrorClass`).
+  </Accordion>
+</AccordionGroup>

@@ -1,0 +1,275 @@
+---
+title: HashSet
+---
+
+A HashSet is an immutable set data structure that provides efficient storage and retrieval of unique values. It uses a HashMap internally for optimal performance.
+
+## Mental Model
+
+- **Immutable**: All operations return new HashSets without mutating the original
+- **Unique values**: Duplicates are automatically removed
+- **Hash-based**: Uses `Hash.hash()` and `Equal.equals()` for values
+- **O(log n)** add, remove, and contains
+- **Unordered**: Iteration order is not guaranteed
+
+## Key Operations
+
+### Create
+
+Build HashSets from values:
+
+```ts
+import { HashSet } from "effect"
+
+// From values
+const fruits = HashSet.make("apple", "banana", "cherry")
+
+// From iterable
+const fromArray = HashSet.fromIterable([1, 2, 3, 2, 1]) // {1, 2, 3}
+const fromSet = HashSet.fromIterable(new Set(["a", "b", "c"]))
+
+// Empty
+const empty = HashSet.empty<string>()
+```
+
+### Query
+
+Check membership and size:
+
+```ts
+import { HashSet } from "effect"
+
+const set = HashSet.make("apple", "banana", "cherry")
+
+// Check membership
+const hasApple = HashSet.has(set, "apple") // true
+const hasGrape = HashSet.has(set, "grape") // false
+
+// Size
+const size = HashSet.size(set) // 3
+const isEmpty = HashSet.isEmpty(set) // false
+
+// Check with predicate
+const hasLong = HashSet.some(set, (s) => s.length > 6) // true ("banana")
+const allShort = HashSet.every(set, (s) => s.length < 10) // true
+```
+
+### Transform
+
+Add or remove elements:
+
+```ts
+import { HashSet } from "effect"
+
+const set = HashSet.make("a", "b", "c")
+
+// Add (returns new set)
+const withD = HashSet.add(set, "d")
+// {"a", "b", "c", "d"}
+
+// Add duplicate (no change)
+const same = HashSet.add(set, "a")
+// {"a", "b", "c"}
+
+// Remove
+const withoutB = HashSet.remove(set, "b")
+// {"a", "c"}
+
+// Remove non-existent (no change)
+const unchanged = HashSet.remove(set, "z")
+```
+
+### Map
+
+Transform values:
+
+```ts
+import { HashSet } from "effect"
+
+const numbers = HashSet.make(1, 2, 3)
+
+// Map (may reduce size if mapping produces duplicates)
+const doubled = HashSet.map(numbers, (n) => n * 2)
+// {2, 4, 6}
+
+const strings = HashSet.make("apple", "banana", "cherry")
+const lengths = HashSet.map(strings, (s) => s.length)
+// {5, 6} ("apple" and "banana" both map to 5, kept only once)
+```
+
+### Filter
+
+Select elements:
+
+```ts
+import { HashSet } from "effect"
+
+const numbers = HashSet.make(1, 2, 3, 4, 5, 6)
+
+// Filter
+const evens = HashSet.filter(numbers, (n) => n % 2 === 0)
+// {2, 4, 6}
+
+// With refinement
+const mixed = HashSet.make("hello", 42, "world", 100)
+const onlyNumbers = HashSet.filter(
+  mixed,
+  (x): x is number => typeof x === "number"
+)
+// {42, 100}
+```
+
+### Fold
+
+Reduce to a single value:
+
+```ts
+import { HashSet } from "effect"
+
+const numbers = HashSet.make(1, 2, 3, 4, 5)
+
+// Sum all values
+const sum = HashSet.reduce(numbers, 0, (acc, n) => acc + n)
+// 15 (order unspecified)
+
+// Concatenate
+const strings = HashSet.make("a", "b", "c")
+const concat = HashSet.reduce(strings, "", (acc, s) => acc + s)
+// "abc" or "bac" etc. (order unspecified)
+```
+
+### Combine
+
+Set operations:
+
+```ts
+import { HashSet } from "effect"
+
+const set1 = HashSet.make("a", "b", "c")
+const set2 = HashSet.make("b", "c", "d")
+
+// Union
+const all = HashSet.union(set1, set2)
+// {"a", "b", "c", "d"}
+
+// Intersection
+const common = HashSet.intersection(set1, set2)
+// {"b", "c"}
+
+// Difference
+const unique = HashSet.difference(set1, set2)
+// {"a"}
+
+// Check subset
+const isSubset = HashSet.isSubset(HashSet.make("a", "b"), set1) // true
+```
+
+### Iterate
+
+Loop over values:
+
+```ts
+import { HashSet } from "effect"
+
+const set = HashSet.make("apple", "banana", "cherry")
+
+// For-of loop
+for (const fruit of set) {
+  console.log(fruit)
+}
+
+// Convert to array
+const array = Array.from(set)
+```
+
+## Type Signatures
+
+```ts
+// Core type
+interface HashSet<V> extends Iterable<V> {}
+
+// Creation
+const empty: <V = never>() => HashSet<V>
+const make: <Values extends ReadonlyArray<any>>(
+  ...values: Values
+) => HashSet<Values[number]>
+const fromIterable: <V>(values: Iterable<V>) => HashSet<V>
+
+// Query
+const has: {
+  <V>(value: V): (self: HashSet<V>) => boolean
+  <V>(self: HashSet<V>, value: V): boolean
+}
+const size: <V>(self: HashSet<V>) => number
+const isEmpty: <V>(self: HashSet<V>) => boolean
+
+// Transform
+const add: {
+  <V>(value: V): (self: HashSet<V>) => HashSet<V>
+  <V>(self: HashSet<V>, value: V): HashSet<V>
+}
+const remove: {
+  <V>(value: V): (self: HashSet<V>) => HashSet<V>
+  <V>(self: HashSet<V>, value: V): HashSet<V>
+}
+
+// Map
+const map: {
+  <V, U>(f: (value: V) => U): (self: HashSet<V>) => HashSet<U>
+  <V, U>(self: HashSet<V>, f: (value: V) => U): HashSet<U>
+}
+
+// Filter
+const filter: {
+  <V, U extends V>(refinement: Refinement<V, U>): (self: HashSet<V>) => HashSet<U>
+  <V>(predicate: Predicate<V>): (self: HashSet<V>) => HashSet<V>
+}
+
+// Combine
+const union: {
+  <V1>(that: HashSet<V1>): <V0>(self: HashSet<V0>) => HashSet<V1 | V0>
+  <V0, V1>(self: HashSet<V0>, that: HashSet<V1>): HashSet<V0 | V1>
+}
+const intersection: {
+  <V1>(that: HashSet<V1>): <V0>(self: HashSet<V0>) => HashSet<V1 & V0>
+  <V0, V1>(self: HashSet<V0>, that: HashSet<V1>): HashSet<V0 & V1>
+}
+const difference: {
+  <V1>(that: HashSet<V1>): <V0>(self: HashSet<V0>) => HashSet<V0>
+  <V0, V1>(self: HashSet<V0>, that: HashSet<V1>): HashSet<V0>
+}
+```
+
+## Custom Equality
+
+Implement `Equal` and `Hash` for custom types:
+
+```ts
+import { Equal, Hash, HashSet } from "effect"
+
+class Person implements Equal.Equal {
+  constructor(readonly name: string, readonly age: number) {}
+
+  [Equal.symbol](other: unknown): boolean {
+    return other instanceof Person && this.name === other.name
+  }
+
+  [Hash.symbol](): number {
+    return Hash.string(this.name)
+  }
+}
+
+const people = HashSet.make(
+  new Person("Alice", 30),
+  new Person("Bob", 25),
+  new Person("Alice", 35) // Duplicate (same name)
+)
+
+console.log(HashSet.size(people)) // 2 ("Alice" deduplicated)
+```
+
+## See Also
+
+- [HashMap](/api/hashmap) — Immutable key-value map
+- [Array](/api/array) — Standard array utilities
+- [Chunk](/api/chunk) — Immutable sequence

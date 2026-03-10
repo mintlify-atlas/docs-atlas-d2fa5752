@@ -1,0 +1,381 @@
+---
+title: '@effect/atom-solid'
+description: 'SolidJS bindings for Effect Atom modules'
+icon: 'atom'
+---
+
+SolidJS bindings for Effect's Atom modules, enabling reactive state management with Effects in SolidJS applications.
+
+## Installation
+
+```bash
+pnpm add @effect/atom-solid solid-js effect
+```
+
+## Overview
+
+Effect Atoms provide a reactive state management solution that seamlessly integrates Effect programs with SolidJS. Atoms represent pieces of state that can be read, written, and derived from other atoms.
+
+## Basic Usage
+
+### Creating Atoms
+
+Create a simple atom with an initial value:
+
+```tsx
+import { Atom } from "effect/unstable/reactivity"
+import { useAtomValue } from "@effect/atom-solid"
+
+const countAtom = Atom.make(0)
+
+function Counter() {
+  const count = useAtomValue(countAtom)
+  return <div>Count: {count()}</div>
+}
+```
+
+### Reading and Writing Atoms
+
+Use `useAtom` to both read and write atom values:
+
+```tsx
+import { Atom } from "effect/unstable/reactivity"
+import { useAtom } from "@effect/atom-solid"
+
+const countAtom = Atom.make(0)
+
+function Counter() {
+  const [count, setCount] = useAtom(countAtom)
+  
+  return (
+    <div>
+      <div>Count: {count()}</div>
+      <button onClick={() => setCount(count() + 1)}>
+        Increment
+      </button>
+      <button onClick={() => setCount((prev) => prev + 1)}>
+        Increment (functional)
+      </button>
+    </div>
+  )
+}
+```
+
+## Derived Atoms
+
+Create atoms that derive their value from other atoms:
+
+```tsx
+import { Atom } from "effect/unstable/reactivity"
+import { useAtomValue } from "@effect/atom-solid"
+
+const countAtom = Atom.make(0)
+const doubleCountAtom = Atom.map(countAtom, (n) => n * 2)
+
+function Display() {
+  const double = useAtomValue(doubleCountAtom)
+  return <div>Double: {double()}</div>
+}
+```
+
+## Async Atoms
+
+Atoms can contain Effect programs for async operations:
+
+```tsx
+import { Effect } from "effect"
+import { Atom, AsyncResult } from "effect/unstable/reactivity"
+import { useAtomValue } from "@effect/atom-solid"
+import { Show } from "solid-js"
+
+const userIdAtom = Atom.make(1)
+
+const userAtom = Atom.map(
+  userIdAtom,
+  (id) => Effect.promise(() =>
+    fetch(`https://api.example.com/users/${id}`).then(res => res.json())
+  )
+)
+
+function UserProfile() {
+  const result = useAtomValue(userAtom)
+  
+  return (
+    <Show
+      when={AsyncResult.isSuccess(result())}
+      fallback={<div>Loading...</div>}
+    >
+      <div>{result().value.name}</div>
+    </Show>
+  )
+}
+```
+
+## Registry Provider
+
+Wrap your app with `RegistryProvider` to manage atom state:
+
+```tsx
+import { RegistryProvider } from "@effect/atom-solid"
+
+function App() {
+  return (
+    <RegistryProvider>
+      <Counter />
+      <Display />
+    </RegistryProvider>
+  )
+}
+```
+
+## Initial Values
+
+Provide initial values for atoms:
+
+```tsx
+import { Atom } from "effect/unstable/reactivity"
+import { RegistryProvider } from "@effect/atom-solid"
+
+const themeAtom = Atom.make("light")
+
+function App() {
+  return (
+    <RegistryProvider
+      initialValues={[
+        Atom.initialValue(themeAtom, "dark")
+      ]}
+    >
+      <YourApp />
+    </RegistryProvider>
+  )
+}
+```
+
+## Effect Integration
+
+Atoms work seamlessly with Effect's runtime and layers:
+
+```tsx
+import { Effect, Layer, ServiceMap } from "effect"
+import { Atom, AsyncResult } from "effect/unstable/reactivity"
+import { useAtomValue } from "@effect/atom-solid"
+import { Show } from "solid-js"
+
+class ApiService extends ServiceMap.Service("ApiService")<
+  ApiService,
+  { fetch: (url: string) => Effect.Effect<unknown> }
+>() {
+  static Live = Layer.succeed(ApiService, {
+    fetch: (url) => Effect.promise(() => fetch(url).then(r => r.json()))
+  })
+}
+
+const runtime = Atom.runtime(ApiService.Live)
+
+const dataAtom = runtime.atom(
+  ApiService.use((api) =>
+    api.fetch("/api/data")
+  )
+)
+
+function Data() {
+  const result = useAtomValue(dataAtom)
+  
+  return (
+    <Show
+      when={AsyncResult.isSuccess(result())}
+      fallback={<div>Loading...</div>}
+    >
+      <div>{JSON.stringify(result().value)}</div>
+    </Show>
+  )
+}
+```
+
+## Atom Families
+
+Create parameterized atoms:
+
+```tsx
+import { Atom } from "effect/unstable/reactivity"
+import { useAtomValue } from "@effect/atom-solid"
+
+const userAtomFamily = (userId: number) =>
+  Atom.make(
+    Effect.promise(() =>
+      fetch(`/api/users/${userId}`).then(r => r.json())
+    )
+  )
+
+function UserCard(props: { userId: number }) {
+  const result = useAtomValue(() => userAtomFamily(props.userId))
+  
+  return (
+    <Show
+      when={AsyncResult.isSuccess(result())}
+    >
+      <div>{result().value.name}</div>
+    </Show>
+  )
+}
+```
+
+## Working with AsyncResult
+
+Handle different states of async atoms:
+
+```tsx
+import { AsyncResult } from "effect/unstable/reactivity"
+import { useAtomValue } from "@effect/atom-solid"
+import { Match } from "effect"
+
+function DataDisplay() {
+  const result = useAtomValue(dataAtom)
+  
+  return (
+    <>
+      {Match.value(result()).pipe(
+        Match.when(AsyncResult.isLoading, () => <div>Loading...</div>),
+        Match.when(AsyncResult.isSuccess, (r) => <div>{r.value}</div>),
+        Match.when(AsyncResult.isFailure, (r) => <div>Error: {r.error}</div>),
+        Match.exhaustive
+      )}
+    </>
+  )
+}
+```
+
+## Promise Mode
+
+Get promises from atom updates:
+
+```tsx
+import { Atom } from "effect/unstable/reactivity"
+import { useAtom } from "@effect/atom-solid"
+
+const dataAtom = Atom.make(
+  Effect.promise(() => fetch("/api/data").then(r => r.json()))
+)
+
+function Form() {
+  const [data, setData] = useAtom(dataAtom, { mode: "promise" })
+  
+  const handleSubmit = async () => {
+    try {
+      const result = await setData(newValue)
+      console.log("Success:", result)
+    } catch (error) {
+      console.error("Error:", error)
+    }
+  }
+  
+  return (
+    <button onClick={handleSubmit}>Submit</button>
+  )
+}
+```
+
+## Hooks Reference
+
+### useAtomValue
+
+Read an atom's value as a Solid signal:
+
+```tsx
+const value = useAtomValue(atom)
+const value = useAtomValue(() => atom) // Reactive atom
+```
+
+### useAtom
+
+Read and write an atom:
+
+```tsx
+const [value, setValue] = useAtom(atom)
+const [value, setValue] = useAtom(atom, { mode: "promise" })
+const [value, setValue] = useAtom(atom, { mode: "promiseExit" })
+```
+
+### useAtomSet
+
+Get only the setter function:
+
+```tsx
+const setValue = useAtomSet(atom)
+const setValue = useAtomSet(atom, { mode: "promise" })
+```
+
+### useAtomRef
+
+Use with AtomRef:
+
+```tsx
+const value = useAtomRef(atomRef)
+```
+
+## Best Practices
+
+1. **Reactive Atoms**: Use functions when atoms need to be reactive: `useAtomValue(() => atom)`
+2. **Atom Granularity**: Create small, focused atoms rather than large state objects
+3. **Derived State**: Use derived atoms instead of duplicating state
+4. **Async Operations**: Use AsyncResult helper functions for proper state handling
+5. **Registry Provider**: Always wrap your app with RegistryProvider
+6. **Error Handling**: Use SolidJS's ErrorBoundary with async atoms
+
+## SolidJS-Specific Features
+
+### Reactive Atoms
+
+SolidJS's fine-grained reactivity works perfectly with atoms:
+
+```tsx
+import { createSignal } from "solid-js"
+import { Atom } from "effect/unstable/reactivity"
+import { useAtomValue } from "@effect/atom-solid"
+
+function Component() {
+  const [userId, setUserId] = createSignal(1)
+  const user = useAtomValue(() => userAtomFamily(userId()))
+  
+  return (
+    <div>
+      <button onClick={() => setUserId(userId() + 1)}>
+        Next User
+      </button>
+      <Show when={AsyncResult.isSuccess(user())}>
+        <div>{user().value.name}</div>
+      </Show>
+    </div>
+  )
+}
+```
+
+### Cleanup
+
+Atoms automatically clean up when components unmount thanks to SolidJS's reactive system:
+
+```tsx
+import { onCleanup } from "solid-js"
+import { useAtomValue } from "@effect/atom-solid"
+
+function Component() {
+  const value = useAtomValue(dataAtom)
+  
+  onCleanup(() => {
+    console.log("Component unmounted, atom subscription cleaned up")
+  })
+  
+  return <div>{value()}</div>
+}
+```
+
+## API Modules
+
+- **Hooks**: SolidJS hooks for atoms (useAtom, useAtomValue, etc.)
+- **RegistryContext**: Registry context and provider
+
+## Related Packages
+
+- [@effect/atom-react](/packages/atom-react)
+- [@effect/atom-vue](/packages/atom-vue)
+- [@effect/vitest](/packages/vitest)

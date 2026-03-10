@@ -1,0 +1,336 @@
+---
+title: HashMap
+---
+
+A HashMap is an immutable key-value data structure that provides efficient lookup, insertion, and deletion operations. It uses a Hash Array Mapped Trie (HAMT) internally for structural sharing and optimal performance.
+
+## Mental Model
+
+- **Immutable**: All operations return new HashMaps without mutating the original
+- **Structural sharing**: Modifications reuse unchanged parts of the tree
+- **Hash-based**: Uses `Hash.hash()` and `Equal.equals()` for keys
+- **O(log n)** lookup, insert, and delete
+- **Custom equality**: Implement `Equal` and `Hash` on your keys for custom behavior
+
+## Key Operations
+
+### Create
+
+Build HashMaps from entries:
+
+```ts
+import { HashMap } from "effect"
+
+// From entries
+const map = HashMap.make(
+  ["alice", 30],
+  ["bob", 25],
+  ["charlie", 35]
+)
+
+// From iterable
+const entries: Array<[string, number]> = [["a", 1], ["b", 2]]
+const fromIterable = HashMap.fromIterable(entries)
+
+// Empty
+const empty = HashMap.empty<string, number>()
+```
+
+### Query
+
+Look up values and check membership:
+
+```ts
+import { HashMap, Option } from "effect"
+
+const map = HashMap.make(["a", 1], ["b", 2], ["c", 3])
+
+// Get value (returns Option)
+const valueA = HashMap.get(map, "a") // Option.some(1)
+const valueD = HashMap.get(map, "d") // Option.none()
+
+// Check if key exists
+const hasB = HashMap.has(map, "b") // true
+const hasD = HashMap.has(map, "d") // false
+
+// Get or throw (unsafe)
+try {
+  const value = HashMap.getUnsafe(map, "a") // 1
+  const missing = HashMap.getUnsafe(map, "z") // throws
+} catch (e) {
+  console.log(e.message) // "HashMap.getUnsafe: key not found"
+}
+
+// Size
+const size = HashMap.size(map) // 3
+const isEmpty = HashMap.isEmpty(map) // false
+```
+
+### Transform
+
+Add, update, or remove entries:
+
+```ts
+import { HashMap } from "effect"
+
+const map = HashMap.make(["a", 1], ["b", 2])
+
+// Set (add or update)
+const withC = HashMap.set(map, "c", 3)
+// HashMap(["a", 1], ["b", 2], ["c", 3])
+
+// Update existing
+const updated = HashMap.modify(map, "a", (n) => n * 10)
+// HashMap(["a", 10], ["b", 2])
+
+// Remove
+const withoutB = HashMap.remove(map, "b")
+// HashMap(["a", 1])
+
+// Set many
+const many = HashMap.setMany(map, [["c", 3], ["d", 4]])
+
+// Remove many
+const fewer = HashMap.removeMany(many, ["c", "d"])
+```
+
+### Map
+
+Transform values:
+
+```ts
+import { HashMap } from "effect"
+
+const map = HashMap.make(["a", 1], ["b", 2], ["c", 3])
+
+// Map values
+const doubled = HashMap.map(map, (value, key) => value * 2)
+// HashMap(["a", 2], ["b", 4], ["c", 6])
+
+// FlatMap (keys and values)
+const expanded = HashMap.flatMap(map, (value, key) =>
+  HashMap.make([`${key}1`, value], [`${key}2`, value * 2])
+)
+// HashMap(["a1", 1], ["a2", 2], ["b1", 2], ["b2", 4], ...)
+```
+
+### Filter
+
+Select entries:
+
+```ts
+import { HashMap, Result } from "effect"
+
+const map = HashMap.make(["a", 1], ["b", 2], ["c", 3], ["d", 4])
+
+// Filter entries
+const evens = HashMap.filter(map, (value) => value % 2 === 0)
+// HashMap(["b", 2], ["d", 4])
+
+// Filter and transform
+const doubled = HashMap.filterMap(map, (value) =>
+  value % 2 === 0 ? Result.succeed(value * 2) : Result.failVoid
+)
+// HashMap(["b", 4], ["d", 8])
+```
+
+### Fold
+
+Reduce to a single value:
+
+```ts
+import { HashMap } from "effect"
+
+const map = HashMap.make(["a", 1], ["b", 2], ["c", 3])
+
+// Reduce
+const sum = HashMap.reduce(map, 0, (acc, value, key) => acc + value)
+// 6
+
+// ForEach (side effects)
+HashMap.forEach(map, (value, key) => {
+  console.log(`${key}: ${value}`)
+})
+// a: 1
+// b: 2
+// c: 3
+```
+
+### Combine
+
+Merge HashMaps:
+
+```ts
+import { HashMap } from "effect"
+
+const map1 = HashMap.make(["a", 1], ["b", 2])
+const map2 = HashMap.make(["b", 20], ["c", 3])
+
+// Union (map2 wins on conflicts)
+const merged = HashMap.union(map1, map2)
+// HashMap(["a", 1], ["b", 20], ["c", 3])
+```
+
+### Extract
+
+Get keys, values, or entries:
+
+```ts
+import { HashMap } from "effect"
+
+const map = HashMap.make(["a", 1], ["b", 2], ["c", 3])
+
+// Keys iterator
+for (const key of HashMap.keys(map)) {
+  console.log(key) // "a", "b", "c"
+}
+
+// Values iterator
+for (const value of HashMap.values(map)) {
+  console.log(value) // 1, 2, 3
+}
+
+// Values as array
+const valuesArray = HashMap.toValues(map) // [1, 2, 3]
+
+// Entries iterator
+for (const [key, value] of HashMap.entries(map)) {
+  console.log(key, value)
+}
+
+// Entries as array
+const entriesArray = HashMap.toEntries(map)
+// [["a", 1], ["b", 2], ["c", 3]]
+```
+
+### Check
+
+Test predicates:
+
+```ts
+import { HashMap } from "effect"
+
+const map = HashMap.make(["a", 1], ["b", 2], ["c", 3])
+
+// Check if any value matches
+const hasEven = HashMap.some(map, (value) => value % 2 === 0) // true
+
+// Check if all values match
+const allPositive = HashMap.every(map, (value) => value > 0) // true
+const allEven = HashMap.every(map, (value) => value % 2 === 0) // false
+
+// Check if key-value pair exists
+const hasPair = HashMap.hasBy(map, (value, key) => key === "a" && value === 1) // true
+
+// Find first matching
+const found = HashMap.findFirst(map, (value) => value > 1)
+// ["b", 2] or ["c", 3] (order unspecified)
+```
+
+### Mutate
+
+Perform efficient batch operations:
+
+```ts
+import { HashMap } from "effect"
+
+const map = HashMap.make(["a", 1])
+
+// Mutate for batch operations
+const result = HashMap.mutate(map, (mutable) => {
+  HashMap.set(mutable, "b", 2)
+  HashMap.set(mutable, "c", 3)
+  HashMap.remove(mutable, "a")
+})
+// HashMap(["b", 2], ["c", 3])
+
+// Manual mutation control
+const mut = HashMap.beginMutation(map)
+HashMap.set(mut, "x", 10)
+HashMap.set(mut, "y", 20)
+const final = HashMap.endMutation(mut)
+```
+
+### Advanced
+
+Use precomputed hashes:
+
+```ts
+import { Hash, HashMap } from "effect"
+
+const map = HashMap.make(["a", 1], ["b", 2])
+
+const key = "a"
+const hash = Hash.string(key)
+
+// Use cached hash for repeated operations
+const hasKey = HashMap.hasHash(map, key, hash)
+const value = HashMap.getHash(map, key, hash)
+
+// Modify with hash
+const updated = HashMap.modifyHash(
+  map,
+  key,
+  hash,
+  (opt) => Option.map(opt, (n) => n + 1)
+)
+```
+
+## Type Signatures
+
+```ts
+// Core types
+interface HashMap<K, V> extends Iterable<[K, V]> {}
+type UpdateFn<V> = (option: Option<V>) => Option<V>
+
+// Creation
+const empty: <K = never, V = never>() => HashMap<K, V>
+const make: <Entries extends ReadonlyArray<readonly [any, any]>>(
+  ...entries: Entries
+) => HashMap<K, V>
+const fromIterable: <K, V>(entries: Iterable<readonly [K, V]>) => HashMap<K, V>
+
+// Query
+const get: {
+  <K>(key: K): <V>(self: HashMap<K, V>) => Option<V>
+  <K, V>(self: HashMap<K, V>, key: K): Option<V>
+}
+const has: {
+  <K>(key: K): <V>(self: HashMap<K, V>) => boolean
+  <K, V>(self: HashMap<K, V>, key: K): boolean
+}
+const size: <K, V>(self: HashMap<K, V>) => number
+const isEmpty: <K, V>(self: HashMap<K, V>) => boolean
+
+// Transform
+const set: {
+  <K, V>(key: K, value: V): (self: HashMap<K, V>) => HashMap<K, V>
+  <K, V>(self: HashMap<K, V>, key: K, value: V): HashMap<K, V>
+}
+const remove: {
+  <K>(key: K): <V>(self: HashMap<K, V>) => HashMap<K, V>
+  <K, V>(self: HashMap<K, V>, key: K): HashMap<K, V>
+}
+const modify: {
+  <K, V>(key: K, f: (v: V) => V): (self: HashMap<K, V>) => HashMap<K, V>
+  <K, V>(self: HashMap<K, V>, key: K, f: (v: V) => V): HashMap<K, V>
+}
+
+// Map
+const map: {
+  <V, K, A>(f: (value: V, key: K) => A): (self: HashMap<K, V>) => HashMap<K, A>
+  <K, V, A>(self: HashMap<K, V>, f: (value: V, key: K) => A): HashMap<K, A>
+}
+
+// Fold
+const reduce: {
+  <Z, V, K>(zero: Z, f: (acc: Z, value: V, key: K) => Z): (self: HashMap<K, V>) => Z
+  <K, V, Z>(self: HashMap<K, V>, zero: Z, f: (acc: Z, value: V, key: K) => Z): Z
+}
+```
+
+## See Also
+
+- [HashSet](/api/hashset) — Immutable set of unique values
+- [Array](/api/array) — Standard array utilities
+- [Chunk](/api/chunk) — Immutable sequence

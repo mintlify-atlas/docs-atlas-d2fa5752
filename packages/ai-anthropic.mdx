@@ -1,0 +1,180 @@
+---
+title: '@effect/ai-anthropic'
+description: 'Anthropic provider integration for Effect AI SDK'
+icon: 'robot'
+---
+
+An Anthropic provider integration that provides type-safe, Effect-based access to Anthropic's Claude API, including messages, streaming, and tool calling.
+
+## Installation
+
+```bash
+pnpm add @effect/ai-anthropic effect
+```
+
+## Setup
+
+Create an Anthropic client by providing your API key:
+
+```ts
+import { AnthropicClient } from "@effect/ai-anthropic"
+import { Effect, Layer, Redacted } from "effect"
+
+const AnthropicLive = AnthropicClient.layer({
+  apiKey: Redacted.make(process.env.ANTHROPIC_API_KEY!)
+})
+```
+
+## Language Model
+
+Use the Anthropic language model for text generation:
+
+```ts
+import { AnthropicLanguageModel } from "@effect/ai-anthropic"
+import { Effect } from "effect"
+import { LanguageModel } from "effect/unstable/ai"
+
+const program = Effect.gen(function*() {
+  const result = yield* LanguageModel.generate({
+    prompt: "Explain the concept of monads in functional programming"
+  })
+  console.log(result)
+}).pipe(
+  Effect.provide(AnthropicLanguageModel.model("claude-sonnet-4-20250514")),
+  Effect.provide(AnthropicLive)
+)
+
+Effect.runPromise(program)
+```
+
+## Streaming Responses
+
+Stream responses for real-time text generation:
+
+```ts
+import { AnthropicLanguageModel } from "@effect/ai-anthropic"
+import { Effect, Stream } from "effect"
+import { LanguageModel } from "effect/unstable/ai"
+
+const program = Effect.gen(function*() {
+  const stream = yield* LanguageModel.streamText({
+    prompt: "Write a short story about a robot"
+  })
+  
+  yield* Stream.runForEach(stream, (chunk) =>
+    Effect.sync(() => process.stdout.write(chunk.text))
+  )
+}).pipe(
+  Effect.provide(AnthropicLanguageModel.model("claude-sonnet-4-20250514")),
+  Effect.provide(AnthropicLive)
+)
+
+Effect.runPromise(program)
+```
+
+## Tool Calling
+
+Use Claude's native tools or define custom tools:
+
+```ts
+import { AnthropicLanguageModel, AnthropicTool } from "@effect/ai-anthropic"
+import { Effect, Schema } from "effect"
+import { LanguageModel, Tool, Toolkit } from "effect/unstable/ai"
+
+// Use Anthropic's native Bash tool
+const program = Effect.gen(function*() {
+  const toolkit = Toolkit.make(AnthropicTool.Bash)
+  
+  const result = yield* LanguageModel.generate({
+    prompt: "List all TypeScript files in the current directory",
+    toolkit
+  })
+  
+  console.log(result)
+}).pipe(
+  Effect.provide(AnthropicLanguageModel.model("claude-sonnet-4-20250514")),
+  Effect.provide(AnthropicLive)
+)
+
+// Define a custom tool
+const SearchTool = Tool.make("SearchTool", {
+  description: "Search for files matching a pattern",
+  parameters: Schema.Struct({ pattern: Schema.String }),
+  success: Schema.String
+})
+
+const customProgram = Effect.gen(function*() {
+  const toolkit = Toolkit.make(SearchTool)
+  const toolkitLayer = toolkit.toLayer({
+    SearchTool: ({ pattern }) => Effect.succeed(`Found: ${pattern}`)
+  })
+  
+  const result = yield* LanguageModel.generate({
+    prompt: "Search for all markdown files",
+    toolkit
+  })
+  
+  return result
+}).pipe(
+  Effect.provide(AnthropicLanguageModel.model("claude-sonnet-4-20250514")),
+  Effect.provide(toolkitLayer),
+  Effect.provide(AnthropicLive)
+)
+```
+
+## Native Tools
+
+Anthropic provides several native tools:
+
+- **AnthropicTool.Bash**: Execute bash commands
+- **AnthropicTool.CodeExecution**: Run code in a sandbox
+- **AnthropicTool.ComputerUse**: Interact with a computer interface
+- **AnthropicTool.Memory**: Store and retrieve information across messages
+- **AnthropicTool.TextEditor**: Edit text files
+
+## Error Handling
+
+Handle Anthropic-specific errors:
+
+```ts
+import { AnthropicError } from "@effect/ai-anthropic"
+import { Effect } from "effect"
+
+const program = Effect.gen(function*() {
+  // Your Anthropic API calls
+}).pipe(
+  Effect.catchTag("HttpClientError", (error) =>
+    Effect.sync(() => {
+      console.error("Anthropic API error:", error)
+      // Handle specific error cases
+    })
+  )
+)
+```
+
+## Telemetry
+
+Integrate with OpenTelemetry for observability:
+
+```ts
+import { AnthropicTelemetry } from "@effect/ai-anthropic"
+import { Effect } from "effect"
+
+// Telemetry attributes are automatically added to traces
+// when using the Anthropic client with OpenTelemetry integration
+```
+
+## API Modules
+
+- **AnthropicClient**: HTTP client for Anthropic API
+- **AnthropicConfig**: Configuration options
+- **AnthropicError**: Error type augmentation
+- **AnthropicLanguageModel**: Language model implementation
+- **AnthropicTelemetry**: OpenTelemetry integration
+- **AnthropicTool**: Provider-defined tools
+
+## Related Packages
+
+- [@effect/ai-openai](/packages/ai-openai)
+- [@effect/ai-openrouter](/packages/ai-openrouter)
+- [@effect/opentelemetry](/packages/opentelemetry)

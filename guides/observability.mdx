@@ -1,0 +1,371 @@
+---
+title: Observability
+description: Add structured logging, distributed tracing, and metrics to Effect applications using built-in observability features
+---
+
+Effect has built-in support for structured logging, distributed tracing, and metrics. This guide covers how to configure logging, export traces with OTLP, and make your applications observable in production.
+
+## Structured Logging
+
+Effect provides powerful logging capabilities with structured metadata, log levels, and batching support.
+
+### Basic Logging
+
+Use `Effect.log*` functions to emit logs at different levels:
+
+```typescript
+import { Effect } from "effect"
+
+export const logCheckoutFlow = Effect.gen(function*() {
+  yield* Effect.logDebug("loading checkout state")
+  yield* Effect.logInfo("validating cart")
+  yield* Effect.logWarning("inventory is low for one line item")
+  yield* Effect.logError("payment provider timeout")
+}).pipe(
+  // Attach structured metadata to all log lines
+  Effect.annotateLogs({
+    service: "checkout-api",
+    route: "POST /checkout"
+  }),
+  // Add a duration span so each log includes checkout=<N>ms metadata
+  Effect.withLogSpan("checkout")
+)
+```
+
+### Log Levels
+
+Control which logs are emitted by setting the minimum log level:
+
+```typescript
+import { Layer, Logger, References } from "effect"
+
+// Raise the minimum level to "Warn" to skip debug/info logs
+export const WarnAndAbove = Layer.succeed(References.MinimumLogLevel, "Warn")
+```
+
+Available log levels (in order):
+- `"Trace"` - Most verbose, for detailed debugging
+- `"Debug"` - Debugging information
+- `"Info"` - Informational messages (default)
+- `"Warn"` - Warning messages
+- `"Error"` - Error messages
+- `"Fatal"` - Fatal errors
+
+### Custom Loggers
+
+#### JSON Logger
+
+Emit logs as JSON for structured log aggregation:
+
+```typescript
+import { Logger, Layer } from "effect"
+
+// Build a logger layer that emits one JSON line per log entry
+export const JsonLoggerLayer = Logger.layer([Logger.consoleJson])
+```
+
+#### File Logger
+
+Write logs to a file:
+
+```typescript
+import { NodeFileSystem } from "@effect/platform-node"
+import { Logger, Layer } from "effect"
+
+export const FileLoggerLayer = Logger.layer([
+  Logger.toFile(Logger.formatSimple, "app.log")
+]).pipe(
+  Layer.provide(NodeFileSystem.layer)
+)
+```
+
+#### Batched Logger
+
+Buffer logs and flush them periodically:
+
+```typescript
+import { Effect, Logger } from "effect"
+
+export const appLogger = Effect.gen(function*() {
+  yield* Effect.logDebug("initializing app logger")
+  
+  return yield* Logger.batched(Logger.formatStructured, {
+    window: "1 second",
+    flush: Effect.fn(function*(batch) {
+      // Send the batch to an external logging service
+      console.log(`Flushing ${batch.length} log entries`)
+    })
+  })
+})
+
+export const AppLoggerLayer = Logger.layer([appLogger])
+```
+
+### Environment-Based Logger
+
+Use different loggers for development and production:
+
+```typescript
+import { Config, Effect, Layer, Logger, References } from "effect"
+
+export const WarnAndAbove = Layer.succeed(References.MinimumLogLevel, "Warn")
+
+export const AppLoggerLayer = Logger.layer([appLogger]).pipe(
+  Layer.provideMerge(WarnAndAbove)
+)
+
+// Switch between loggers based on NODE_ENV
+export const LoggerLayer = Layer.unwrap(Effect.gen(function*() {
+  const env = yield* Config.string("NODE_ENV").pipe(
+    Config.withDefault("development")
+  )
+  
+  if (env === "production") {
+    return AppLoggerLayer
+  }
+  
+  return Logger.layer([Logger.defaultLogger])
+}))
+```
+
+## Distributed Tracing
+
+Tracing helps you understand how requests flow through your system. Effect supports OpenTelemetry-compatible tracing.
+
+### Setting Up OTLP Tracing
+
+For new projects, use the lightweight OTLP modules from `effect/unstable/observability`:
+
+```typescript
+import { Effect, Layer } from "effect"
+import { FetchHttpClient } from "effect/unstable/http"
+import { OtlpLogger, OtlpSerialization, OtlpTracer } from "effect/unstable/observability"
+
+// Configure OTLP span export
+export const OtlpTracingLayer = OtlpTracer.layer({
+  url: "http://localhost:4318/v1/traces",
+  resource: {
+    serviceName: "checkout-api",
+    serviceVersion: "1.0.0",
+    attributes: {
+      "deployment.environment": "staging"
+    }
+  }
+})
+
+// Configure OTLP log export
+export const OtlpLoggingLayer = OtlpLogger.layer({
+  url: "http://localhost:4318/v1/logs",
+  resource: {
+    serviceName: "checkout-api",
+    serviceVersion: "1.0.0"
+  }
+})
+
+// Reusable app-wide observability layer
+export const ObservabilityLayer = Layer.merge(
+  OtlpTracingLayer,
+  OtlpLoggingLayer
+).pipe(
+  Layer.provide(OtlpSerialization.layerJson),
+  Layer.provide(FetchHttpClient.layer)
+)
+```
+
+### Adding Spans to Effects
+
+Use `Effect.withSpan` to create trace spans:
+
+```typescript
+import { Effect } from "effect"
+
+export const processPayment = Effect.gen(function*() {
+  yield* Effect.logInfo("charging card")
+  yield* Effect.sleep("50 millis")
+}).pipe(
+  Effect.withSpan("checkout.charge-card"),
+  Effect.annotateSpans({
+    "checkout.order_id": "ord_123",
+    "checkout.provider": "acme-pay"
+  })
+)
+```
+
+### Automatic Spans with Effect.fn
+
+When you use `Effect.fn("name")`, it automatically creates a span:
+
+```typescript
+import { Effect, ServiceMap } from "effect"
+
+export class Checkout extends ServiceMap.Service<Checkout, {
+  processCheckout(orderId: string): Effect.Effect<void>
+}>()("acme/Checkout") {
+  static readonly layer = Layer.effect(
+    Checkout,
+    Effect.gen(function*() {
+      return Checkout.of({
+        // This automatically creates a "Checkout.processCheckout" span
+        processCheckout: Effect.fn("Checkout.processCheckout")(function*(orderId: string) {
+          yield* Effect.logInfo("starting checkout", { orderId })
+          
+          yield* Effect.sleep("50 millis").pipe(
+            Effect.withSpan("checkout.charge-card"),
+            Effect.annotateSpans({
+              "checkout.order_id": orderId,
+              "checkout.provider": "acme-pay"
+            })
+          )
+          
+          yield* Effect.sleep("20 millis").pipe(
+            Effect.withSpan("checkout.persist-order")
+          )
+          
+          yield* Effect.logInfo("checkout completed", { orderId })
+        })
+      })
+    })
+  )
+}
+```
+
+### Adding Spans to Layers
+
+You can also attach spans to layers:
+
+```typescript
+const CheckoutTest = Layer.effectDiscard(
+  Effect.gen(function*() {
+    const checkout = yield* Checkout
+    yield* checkout.processCheckout("ord_123")
+  }).pipe(
+    Effect.withSpan("checkout-test-run")
+  )
+).pipe(
+  Layer.withSpan("checkout-test"),
+  Layer.provide(Checkout.layer)
+)
+```
+
+### Integrating with Your App
+
+Provide the observability layer at the very end so all spans are exported:
+
+```typescript
+import { NodeRuntime } from "@effect/platform-node"
+import { Layer } from "effect"
+
+const Main = CheckoutTest.pipe(
+  // Provide the observability layer at the very end
+  Layer.provide(ObservabilityLayer)
+)
+
+Layer.launch(Main).pipe(
+  NodeRuntime.runMain
+)
+```
+
+## Trace Context and Propagation
+
+Effect automatically propagates trace context across fiber boundaries and async operations. When you fork fibers or use combinators like `Effect.all`, child spans are properly linked to parent spans.
+
+## Metrics
+
+Effect supports metrics through the OpenTelemetry protocol. Metrics are automatically collected and can be exported via OTLP.
+
+<Note>
+For detailed metrics configuration, refer to the OpenTelemetry integration documentation.
+</Note>
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Use Structured Logs" icon="circle-1">
+    Always attach structured metadata with `Effect.annotateLogs` instead of string interpolation. This makes logs searchable and filterable.
+  </Card>
+  
+  <Card title="Meaningful Span Names" icon="circle-2">
+    Use descriptive span names that indicate the operation: `"database.query"`, `"http.request"`, `"checkout.process"`.
+  </Card>
+  
+  <Card title="Attach Context" icon="circle-3">
+    Add relevant attributes to spans with `Effect.annotateSpans`. Include IDs, user info, and operation parameters.
+  </Card>
+  
+  <Card title="Single Observability Layer" icon="circle-4">
+    Create one reusable observability layer and provide it at the application root. Don't create multiple exporters.
+  </Card>
+</CardGroup>
+
+## Observability Stack Examples
+
+<Tabs>
+  <Tab title="Jaeger">
+    ```typescript
+    // Jaeger accepts OTLP on port 4318
+    export const OtlpTracingLayer = OtlpTracer.layer({
+      url: "http://localhost:4318/v1/traces",
+      resource: {
+        serviceName: "my-service",
+        serviceVersion: "1.0.0"
+      }
+    })
+    ```
+    
+    Run Jaeger with Docker:
+    ```bash
+    docker run -d --name jaeger \
+      -p 16686:16686 \
+      -p 4318:4318 \
+      jaegertracing/all-in-one:latest
+    ```
+  </Tab>
+  
+  <Tab title="Grafana Tempo">
+    ```typescript
+    // Tempo with OTLP receiver
+    export const OtlpTracingLayer = OtlpTracer.layer({
+      url: "http://localhost:4318/v1/traces",
+      resource: {
+        serviceName: "my-service"
+      }
+    })
+    ```
+    
+    Configure Tempo with OTLP receiver in `tempo.yaml`:
+    ```yaml
+    distributor:
+      receivers:
+        otlp:
+          protocols:
+            http:
+    ```
+  </Tab>
+  
+  <Tab title="Honeycomb">
+    ```typescript
+    // Honeycomb requires API key in headers
+    export const OtlpTracingLayer = OtlpTracer.layer({
+      url: "https://api.honeycomb.io/v1/traces",
+      headers: {
+        "x-honeycomb-team": process.env.HONEYCOMB_API_KEY
+      },
+      resource: {
+        serviceName: "my-service"
+      }
+    })
+    ```
+  </Tab>
+</Tabs>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Testing" icon="flask" href="/guides/testing">
+    Test your instrumented services with @effect/vitest
+  </Card>
+  
+  <Card title="Error Handling" icon="triangle-exclamation" href="/guides/error-handling">
+    Learn how errors are traced and logged
+  </Card>
+</CardGroup>

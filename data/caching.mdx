@@ -1,0 +1,502 @@
+---
+title: "Caching"
+description: "Efficient caching with automatic TTL management and memoization"
+---
+
+Effect provides a powerful caching system with automatic time-to-live (TTL) management, capacity limits, and built-in memoization for expensive computations.
+
+## Overview
+
+The Cache module provides:
+
+- **Automatic lookup** on cache misses
+- **TTL management** with configurable expiration
+- **Capacity limits** with LRU eviction
+- **Concurrent access** with deduplication
+- **Type safety** with full TypeScript inference
+
+## Basic Usage
+
+### Creating a Cache
+
+Create a cache with a lookup function:
+
+```typescript
+import { Cache, Effect } from "effect"
+
+const program = Effect.gen(function* () {
+  const cache = yield* Cache.make({
+    capacity: 100,
+    lookup: (key: string) => Effect.succeed(key.length)
+  })
+  
+  // First access triggers lookup
+  const result1 = yield* Cache.get(cache, "hello")
+  console.log(result1) // 5
+  
+  // Second access returns cached value
+  const result2 = yield* Cache.get(cache, "hello")
+  console.log(result2) // 5 (from cache)
+})
+```
+
+### Cache with TTL
+
+Add time-to-live for automatic expiration:
+
+```typescript
+import { Cache, Effect } from "effect"
+
+const program = Effect.gen(function* () {
+  const cache = yield* Cache.make({
+    capacity: 100,
+    lookup: (key: string) => Effect.succeed(key.length),
+    timeToLive: "5 minutes"
+  })
+  
+  const result = yield* Cache.get(cache, "hello")
+  // Value expires after 5 minutes
+})
+```
+
+<Note>
+TTL can be specified as a Duration string (`"5 minutes"`, `"1 hour"`) or Duration object.
+</Note>
+
+## Advanced Caching
+
+### Dynamic TTL
+
+Set TTL based on the cached value or key:
+
+```typescript
+import { Cache, Effect, Exit } from "effect"
+
+const program = Effect.gen(function* () {
+  const cache = yield* Cache.makeWith({
+    capacity: 1000,
+    lookup: (userId: number) =>
+      Effect.gen(function* () {
+        const user = yield* fetchUser(userId)
+        return user
+      }),
+    timeToLive: (exit, key) => {
+      if (Exit.isFailure(exit)) {
+        // Short TTL for errors
+        return "1 minute"
+      }
+      
+      const user = exit.value
+      // Different TTL based on user type
+      return user.isPremium ? "1 hour" : "5 minutes"
+    }
+  })
+  
+  const user = yield* Cache.get(cache, 123)
+})
+```
+
+### Error Handling
+
+Cache lookup errors are propagated:
+
+```typescript
+import { Cache, Effect } from "effect"
+
+const program = Effect.gen(function* () {
+  const cache = yield* Cache.make<string, number, string>({
+    capacity: 10,
+    lookup: (key: string) =>
+      key === "error"
+        ? Effect.fail("Lookup failed")
+        : Effect.succeed(key.length)
+  })
+  
+  // Successful lookup
+  const success = yield* Cache.get(cache, "hello")
+  
+  // Failed lookup propagates error
+  const failure = yield* Cache.get(cache, "error").pipe(
+    Effect.catchAll((error) => Effect.succeed(-1))
+  )
+})
+```
+
+## Cache Operations
+
+### Get and Set
+
+Manually set cache values:
+
+```typescript
+import { Cache, Effect } from "effect"
+
+const program = Effect.gen(function* () {
+  const cache = yield* Cache.make({
+    capacity: 100,
+    lookup: (key: string) => Effect.succeed(key.length)
+  })
+  
+  // Set a value directly
+  yield* Cache.set(cache, "hello", 42)
+  
+  // Get returns the manually set value
+  const result = yield* Cache.get(cache, "hello")
+  console.log(result) // 42 (not 5)
+})
+```
+
+### Check Existence
+
+Check if a key exists without triggering lookup:
+
+```typescript
+import { Cache, Effect } from "effect"
+
+const program = Effect.gen(function* () {
+  const cache = yield* Cache.make({
+    capacity: 100,
+    lookup: (key: string) => Effect.succeed(key.length)
+  })
+  
+  // Check without lookup
+  const exists1 = yield* Cache.has(cache, "hello")
+  console.log(exists1) // false
+  
+  // Populate cache
+  yield* Cache.get(cache, "hello")
+  
+  // Now it exists
+  const exists2 = yield* Cache.has(cache, "hello")
+  console.log(exists2) // true
+})
+```
+
+### Get Without Lookup
+
+Retrieve only if cached:
+
+```typescript
+import { Cache, Effect, Option } from "effect"
+
+const program = Effect.gen(function* () {
+  const cache = yield* Cache.make({
+    capacity: 100,
+    lookup: (key: string) => Effect.succeed(key.length)
+  })
+  
+  // Returns None without triggering lookup
+  const empty = yield* Cache.getOption(cache, "hello")
+  console.log(empty) // Option.none()
+  
+  // Populate cache
+  yield* Cache.get(cache, "hello")
+  
+  // Now returns Some
+  const cached = yield* Cache.getOption(cache, "hello")
+  console.log(cached) // Option.some(5)
+})
+```
+
+### Invalidation
+
+Remove entries from the cache:
+
+```typescript
+import { Cache, Effect } from "effect"
+
+const program = Effect.gen(function* () {
+  const cache = yield* Cache.make({
+    capacity: 100,
+    lookup: (key: string) => Effect.succeed(key.length)
+  })
+  
+  yield* Cache.set(cache, "hello", 5)
+  
+  // Invalidate single key
+  yield* Cache.invalidate(cache, "hello")
+  
+  // Invalidate all keys
+  yield* Cache.invalidateAll(cache)
+})
+```
+
+## Capacity Management
+
+### LRU Eviction
+
+Caches use least-recently-used eviction:
+
+```typescript
+import { Cache, Effect } from "effect"
+
+const program = Effect.gen(function* () {
+  const cache = yield* Cache.make({
+    capacity: 2,
+    lookup: (key: string) => Effect.succeed(key.length)
+  })
+  
+  yield* Cache.get(cache, "a") // Cache: [a]
+  yield* Cache.get(cache, "b") // Cache: [a, b]
+  yield* Cache.get(cache, "c") // Cache: [b, c] (a evicted)
+  
+  const hasA = yield* Cache.has(cache, "a")
+  console.log(hasA) // false (evicted)
+})
+```
+
+### Cache Size
+
+Check current cache size:
+
+```typescript
+import { Cache, Effect } from "effect"
+
+const program = Effect.gen(function* () {
+  const cache = yield* Cache.make({
+    capacity: 100,
+    lookup: (key: string) => Effect.succeed(key.length)
+  })
+  
+  yield* Cache.set(cache, "a", 1)
+  yield* Cache.set(cache, "b", 2)
+  
+  const size = yield* Cache.size(cache)
+  console.log(size) // 2
+})
+```
+
+## Concurrent Access
+
+### Request Deduplication
+
+Concurrent requests for the same key are deduplicated:
+
+```typescript
+import { Cache, Effect } from "effect"
+
+const program = Effect.gen(function* () {
+  let lookupCount = 0
+  
+  const cache = yield* Cache.make({
+    capacity: 10,
+    lookup: (key: string) =>
+      Effect.sync(() => {
+        lookupCount++
+        return key.length
+      })
+  })
+  
+  // Multiple concurrent requests
+  const results = yield* Effect.all([
+    Cache.get(cache, "hello"),
+    Cache.get(cache, "hello"),
+    Cache.get(cache, "hello")
+  ], { concurrency: "unbounded" })
+  
+  console.log(results) // [5, 5, 5]
+  console.log(lookupCount) // 1 (lookup called only once)
+})
+```
+
+## Complex Keys
+
+### Data Class Keys
+
+Use Data classes for complex keys with structural equality:
+
+```typescript
+import { Cache, Data, Effect } from "effect"
+
+class UserId extends Data.Class<{ id: number }> {}
+
+const program = Effect.gen(function* () {
+  const cache = yield* Cache.make({
+    capacity: 1000,
+    lookup: (userId: UserId) =>
+      Effect.gen(function* () {
+        return yield* fetchUser(userId.id)
+      }),
+    timeToLive: "5 minutes"
+  })
+  
+  const userId = new UserId({ id: 123 })
+  const user = yield* Cache.get(cache, userId)
+})
+```
+
+## Real-World Examples
+
+### Database Query Cache
+
+```typescript
+import { Cache, Effect, Schema } from "effect"
+import * as Sql from "effect/unstable/sql"
+
+const User = Schema.Struct({
+  id: Schema.Number,
+  name: Schema.String,
+  email: Schema.String
+})
+
+const makeUserCache = Effect.gen(function* () {
+  const sql = yield* Sql.SqlClient.SqlClient
+  
+  return yield* Cache.make({
+    capacity: 1000,
+    lookup: (userId: number) =>
+      Effect.gen(function* () {
+        const rows = yield* sql<{
+          id: number
+          name: string
+          email: string
+        }>`SELECT * FROM users WHERE id = ${userId}`
+        
+        if (rows.length === 0) {
+          return yield* Effect.fail("User not found")
+        }
+        
+        return yield* Schema.decode(User)(rows[0])
+      }),
+    timeToLive: "10 minutes"
+  })
+})
+
+const getUser = (userId: number) =>
+  Effect.gen(function* () {
+    const cache = yield* makeUserCache
+    return yield* Cache.get(cache, userId)
+  })
+```
+
+### API Response Cache
+
+```typescript
+import { Cache, Effect } from "effect"
+
+interface ApiResponse {
+  data: unknown
+  etag: string
+}
+
+const makeApiCache = Effect.gen(function* () {
+  return yield* Cache.makeWith({
+    capacity: 500,
+    lookup: (url: string) =>
+      Effect.tryPromise({
+        try: async () => {
+          const response = await fetch(url)
+          const data = await response.json()
+          return {
+            data,
+            etag: response.headers.get("etag") || ""
+          }
+        },
+        catch: (error) => new Error(`Failed to fetch: ${error}`)
+      }),
+    timeToLive: (exit, url) => {
+      if (Exit.isFailure(exit)) return "30 seconds"
+      
+      // Cache longer for cacheable endpoints
+      if (url.includes("/static/")) return "1 hour"
+      return "5 minutes"
+    }
+  })
+})
+```
+
+### Computation Memoization
+
+```typescript
+import { Cache, Effect } from "effect"
+
+interface FibInput {
+  readonly n: number
+}
+
+const makeFibCache = Effect.gen(function* () {
+  return yield* Cache.make({
+    capacity: 1000,
+    lookup: (input: FibInput) =>
+      Effect.gen(function* () {
+        if (input.n <= 1) return input.n
+        
+        const cache = yield* makeFibCache
+        const a = yield* Cache.get(cache, { n: input.n - 1 })
+        const b = yield* Cache.get(cache, { n: input.n - 2 })
+        
+        return a + b
+      })
+  })
+})
+
+const fibonacci = (n: number) =>
+  Effect.gen(function* () {
+    const cache = yield* makeFibCache
+    return yield* Cache.get(cache, { n })
+  })
+```
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Set appropriate capacity">
+    Choose capacity based on expected key count and memory constraints:
+    
+    ```typescript
+    const cache = yield* Cache.make({
+      capacity: 1000, // Balance memory vs hit rate
+      lookup: expensiveOperation
+    })
+    ```
+  </Accordion>
+  
+  <Accordion title="Use TTL for stale data">
+    Set TTL based on how fresh data needs to be:
+    
+    ```typescript
+    const cache = yield* Cache.make({
+      capacity: 100,
+      lookup: fetchData,
+      timeToLive: "5 minutes" // Balance freshness vs load
+    })
+    ```
+  </Accordion>
+  
+  <Accordion title="Handle lookup errors">
+    Consider different TTL for errors:
+    
+    ```typescript
+    const cache = yield* Cache.makeWith({
+      capacity: 100,
+      lookup: riskyOperation,
+      timeToLive: (exit) =>
+        Exit.isFailure(exit) ? "30 seconds" : "5 minutes"
+    })
+    ```
+  </Accordion>
+  
+  <Accordion title="Invalidate on updates">
+    Clear cache when underlying data changes:
+    
+    ```typescript
+    const updateUser = (id: number, data: UserData) =>
+      Effect.gen(function* () {
+        yield* saveToDatabase(id, data)
+        yield* Cache.invalidate(userCache, id)
+      })
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="SQL" icon="database" href="/data/sql">
+    Cache database query results
+  </Card>
+  
+  <Card title="Schema" icon="check" href="/data/schema">
+    Validate cached data
+  </Card>
+</CardGroup>

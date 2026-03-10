@@ -1,0 +1,673 @@
+---
+title: Tools & Chat
+description: Build AI agents with tool calling and stateful conversations
+---
+
+Effect AI enables you to build sophisticated AI agents by combining tool calling with stateful chat sessions. This page covers defining tools, implementing handlers, and managing conversations.
+
+## Tools
+
+Tools allow AI models to perform actions like calling APIs, querying databases, or executing code within your application context.
+
+### Defining Tools
+
+Create a tool using `Tool.make` with a name, description, parameters schema, and success schema:
+
+```ts
+import { Schema } from "effect"
+import { Tool } from "effect/unstable/ai"
+
+const GetWeather = Tool.make("GetWeather", {
+  description: "Get current weather for a location",
+  parameters: Schema.Struct({
+    location: Schema.String.pipe(
+      Schema.annotations({ description: "City name, e.g. 'San Francisco'" })
+    ),
+    units: Schema.Literals("celsius", "fahrenheit").pipe(
+      Schema.withDecodingDefault(() => "celsius" as const)
+    )
+  }),
+  success: Schema.Struct({
+    temperature: Schema.Number,
+    condition: Schema.String,
+    humidity: Schema.Number
+  })
+})
+```
+
+### Tool Options
+
+**Description**: Helps the model understand when to use the tool
+
+```ts
+const SearchDatabase = Tool.make("SearchDatabase", {
+  description: "Search the product database by keyword. Use this when the user asks about products, inventory, or pricing.",
+  parameters: Schema.Struct({ query: Schema.String }),
+  success: Schema.Array(ProductSchema)
+})
+```
+
+**Failure Schemas**: Define expected error types
+
+```ts
+const DeleteUser = Tool.make("DeleteUser", {
+  description: "Delete a user account",
+  parameters: Schema.Struct({ userId: Schema.String }),
+  success: Schema.Struct({ deleted: Schema.Boolean }),
+  failure: Schema.Struct({
+    error: Schema.Literals("not_found", "permission_denied")
+  }),
+  failureMode: "return" // Return failures instead of throwing
+})
+```
+
+**Needs Approval**: Require user approval before execution
+
+```ts
+const SendEmail = Tool.make("SendEmail", {
+  description: "Send an email",
+  parameters: Schema.Struct({
+    to: Schema.String,
+    subject: Schema.String,
+    body: Schema.String
+  }),
+  success: Schema.Struct({ sent: Schema.Boolean }),
+  needsApproval: true // Always require approval
+})
+
+// Or conditional approval
+const TransferMoney = Tool.make("TransferMoney", {
+  description: "Transfer money between accounts",
+  parameters: Schema.Struct({
+    amount: Schema.Number,
+    from: Schema.String,
+    to: Schema.String
+  }),
+  success: Schema.Struct({ transactionId: Schema.String }),
+  needsApproval: ({ amount }) => amount > 1000 // Only large transfers
+})
+```
+
+### Toolkits
+
+Group related tools into a toolkit:
+
+```ts
+import { Effect } from "effect"
+import { Tool, Toolkit } from "effect/unstable/ai"
+
+const GetCurrentTime = Tool.make("GetCurrentTime", {
+  description: "Get the current time",
+  success: Schema.String
+})
+
+const GetWeather = Tool.make("GetWeather", {
+  description: "Get current weather",
+  parameters: Schema.Struct({ location: Schema.String }),
+  success: Schema.Struct({
+    temperature: Schema.Number,
+    condition: Schema.String
+  })
+})
+
+const SearchWeb = Tool.make("SearchWeb", {
+  description: "Search the web",
+  parameters: Schema.Struct({ query: Schema.String }),
+  success: Schema.Array(Schema.Struct({
+    title: Schema.String,
+    url: Schema.String,
+    snippet: Schema.String
+  }))
+})
+
+// Create a toolkit
+const AssistantToolkit = Toolkit.make(
+  GetCurrentTime,
+  GetWeather,
+  SearchWeb
+)
+```
+
+### Implementing Handlers
+
+Convert a toolkit to a Layer with handler implementations:
+
+```ts
+import { DateTime, Effect, Layer } from "effect"
+
+const AssistantToolkitLayer = AssistantToolkit.toLayer(
+  Effect.gen(function*() {
+    // Access any services you need
+    const weatherService = yield* WeatherService
+    const searchService = yield* SearchService
+    
+    return AssistantToolkit.of({
+      GetCurrentTime: Effect.fn("AssistantToolkit.GetCurrentTime")(
+        function*() {
+          const now = yield* DateTime.now
+          return DateTime.formatIso(now)
+        }
+      ),
+      
+      GetWeather: Effect.fn("AssistantToolkit.GetWeather")(
+        function*({ location }) {
+          return yield* weatherService.getCurrentWeather(location)
+        }
+      ),
+      
+      SearchWeb: Effect.fn("AssistantToolkit.SearchWeb")(
+        function*({ query }) {
+          const results = yield* searchService.search(query)
+          return results.slice(0, 5)
+        }
+      )
+    })
+  })
+).pipe(
+  Layer.provide(WeatherServiceLive),
+  Layer.provide(SearchServiceLive)
+)
+```
+
+### Using Tools with LanguageModel
+
+Pass a toolkit to enable tool calling:
+
+```ts
+import { Effect } from "effect"
+import { LanguageModel } from "effect/unstable/ai"
+
+const program = Effect.gen(function*() {
+  const toolkit = yield* AssistantToolkit
+  
+  const response = yield* LanguageModel.generateText({
+    prompt: "What's the weather in San Francisco and what time is it?",
+    toolkit
+  })
+  
+  console.log("Response:", response.text)
+  console.log("Tool calls made:", response.toolCalls.length)
+  
+  // Inspect tool calls
+  for (const call of response.toolCalls) {
+    console.log(`Called ${call.name} with:`, call.params)
+  }
+  
+  // Inspect tool results
+  for (const result of response.toolResults) {
+    console.log(`Result from ${result.name}:`, result.result)
+    console.log(`Failed: ${result.isFailure}`)
+  }
+})
+
+const runnable = program.pipe(
+  Effect.provide(modelLayer),
+  Effect.provide(AssistantToolkitLayer)
+)
+```
+
+### Tool Choice Control
+
+Control how the model uses tools:
+
+```ts
+// Auto (default): Model decides whether to call tools
+const response1 = yield* LanguageModel.generateText({
+  prompt: "Hello!",
+  toolkit,
+  toolChoice: "auto"
+})
+
+// None: Disable tool calling
+const response2 = yield* LanguageModel.generateText({
+  prompt: "Hello!",
+  toolkit,
+  toolChoice: "none"
+})
+
+// Required: Force the model to call at least one tool
+const response3 = yield* LanguageModel.generateText({
+  prompt: "What's the weather?",
+  toolkit,
+  toolChoice: "required"
+})
+
+// Specific tool: Force a particular tool
+const response4 = yield* LanguageModel.generateText({
+  prompt: "Weather please",
+  toolkit,
+  toolChoice: { tool: "GetWeather" }
+})
+
+// Subset of tools: Restrict to specific tools
+const response5 = yield* LanguageModel.generateText({
+  prompt: "Help me",
+  toolkit,
+  toolChoice: {
+    mode: "required",
+    oneOf: ["GetWeather", "GetCurrentTime"]
+  }
+})
+```
+
+### Provider-Defined Tools
+
+Some providers offer built-in tools like web search or code execution:
+
+```ts
+import { OpenAiTool } from "@effect/ai-openai"
+import { AnthropicTool } from "@effect/ai-anthropic"
+
+// OpenAI tools
+const webSearch = OpenAiTool.WebSearch({
+  search_context_size: "medium"
+})
+
+const codeInterpreter = OpenAiTool.CodeInterpreter()
+
+const fileSearch = OpenAiTool.FileSearch({
+  vector_store_ids: ["vs_abc123"]
+})
+
+// Anthropic tools
+const computerUse = AnthropicTool.ComputerUse({
+  display_width_px: 1920,
+  display_height_px: 1080
+})
+
+const bash = AnthropicTool.Bash()
+
+// Combine with user-defined tools
+const mixedToolkit = Toolkit.make(
+  GetWeather,
+  GetCurrentTime,
+  webSearch,
+  codeInterpreter
+)
+```
+
+Provider-defined tools are executed server-side and don't require handlers in your application.
+
+## Chat
+
+The `Chat` module provides stateful conversation sessions with automatic history management.
+
+### Creating a Chat Session
+
+Create an empty chat or initialize with a prompt:
+
+```ts
+import { Effect } from "effect"
+import { Chat, Prompt } from "effect/unstable/ai"
+
+// Empty chat
+const chat1 = yield* Chat.empty
+
+// With initial prompt
+const chat2 = yield* Chat.fromPrompt("Hello!")
+
+// With system message
+const chat3 = yield* Chat.fromPrompt([
+  {
+    role: "system",
+    content: "You are a helpful coding assistant."
+  }
+])
+
+// Using Prompt utilities
+const systemPrompt = Prompt.empty.pipe(
+  Prompt.setSystem("You are a helpful assistant.")
+)
+const chat4 = yield* Chat.fromPrompt(systemPrompt)
+```
+
+### Multi-Turn Conversations
+
+The chat automatically maintains history:
+
+```ts
+import { Effect } from "effect"
+import { Chat } from "effect/unstable/ai"
+
+const program = Effect.gen(function*() {
+  const chat = yield* Chat.fromPrompt([
+    {
+      role: "system",
+      content: "You are a helpful assistant."
+    }
+  ])
+  
+  // First turn
+  const response1 = yield* chat.generateText({
+    prompt: "What's the capital of France?"
+  })
+  console.log("Assistant:", response1.text)
+  
+  // Second turn - chat remembers previous context
+  const response2 = yield* chat.generateText({
+    prompt: "What's its population?"
+  })
+  console.log("Assistant:", response2.text)
+  
+  // Third turn
+  const response3 = yield* chat.generateText({
+    prompt: "What are some famous landmarks there?"
+  })
+  console.log("Assistant:", response3.text)
+})
+
+const runnable = program.pipe(
+  Effect.provide(modelLayer)
+)
+```
+
+### Streaming Chat
+
+Stream responses while maintaining history:
+
+```ts
+import { Effect, Stream } from "effect"
+import { Chat } from "effect/unstable/ai"
+
+const program = Effect.gen(function*() {
+  const chat = yield* Chat.empty
+  
+  const stream = chat.streamText({
+    prompt: "Write a short story about space"
+  })
+  
+  yield* Stream.runForEach(stream, (part) => {
+    if (part.type === "text-delta") {
+      return Effect.sync(() => process.stdout.write(part.delta))
+    }
+    return Effect.void
+  })
+  
+  // History is updated after streaming completes
+  const response2 = yield* chat.generateText({
+    prompt: "What was the main character's name?"
+  })
+  console.log("\nAssistant:", response2.text)
+})
+```
+
+### Structured Output with Chat
+
+Generate validated objects while maintaining history:
+
+```ts
+import { Schema } from "effect"
+import { Chat } from "effect/unstable/ai"
+
+const ContactSchema = Schema.Struct({
+  name: Schema.String,
+  email: Schema.String,
+  phone: Schema.optional(Schema.String)
+})
+
+const program = Effect.gen(function*() {
+  const chat = yield* Chat.empty
+  
+  const response = yield* chat.generateObject({
+    prompt: "Extract contact: John Doe, john@example.com",
+    schema: ContactSchema
+  })
+  
+  console.log("Contact:", response.value)
+  
+  // Continue conversation
+  const response2 = yield* chat.generateText({
+    prompt: "Format that as a business card"
+  })
+  console.log("Card:", response2.text)
+})
+```
+
+### Building Agentic Loops
+
+Create AI agents that use tools iteratively:
+
+```ts
+import { Effect } from "effect"
+import { Chat, Tool, Toolkit } from "effect/unstable/ai"
+
+const tools = Toolkit.make(
+  Tool.make("SearchDatabase", {
+    description: "Search the database",
+    parameters: Schema.Struct({ query: Schema.String }),
+    success: Schema.Array(Schema.Unknown)
+  }),
+  Tool.make("AnalyzeData", {
+    description: "Analyze data",
+    parameters: Schema.Struct({ data: Schema.Unknown }),
+    success: Schema.String
+  })
+)
+
+const agent = Effect.gen(function*() {
+  const toolkit = yield* tools
+  
+  // Initialize chat with system prompt
+  const chat = yield* Chat.fromPrompt([
+    {
+      role: "system",
+      content: "You are an AI agent that helps analyze data. Use tools to gather and analyze information."
+    },
+    {
+      role: "user",
+      content: "Find and analyze recent sales data"
+    }
+  ])
+  
+  // Run agent loop until no more tool calls
+  let maxIterations = 10
+  while (maxIterations-- > 0) {
+    const response = yield* chat.generateText({
+      prompt: [], // Empty prompt - uses chat history
+      toolkit
+    })
+    
+    if (response.toolCalls.length === 0) {
+      // Agent returned final answer
+      return response.text
+    }
+    
+    // Tool calls were executed and added to history automatically
+    // Continue the loop
+  }
+  
+  return "Agent exceeded max iterations"
+})
+
+const runnable = agent.pipe(
+  Effect.provide(modelLayer),
+  Effect.provide(toolsLayer)
+)
+```
+
+### Persisting Chat History
+
+Export and restore chat sessions:
+
+```ts
+import { Effect } from "effect"
+import { Chat } from "effect/unstable/ai"
+
+// Export to JSON
+const saveChat = Effect.gen(function*() {
+  const chat = yield* Chat.empty
+  
+  yield* chat.generateText({ prompt: "Hello!" })
+  yield* chat.generateText({ prompt: "How are you?" })
+  
+  // Export as JSON string
+  const json = yield* chat.exportJson
+  
+  // Save to storage
+  yield* Effect.sync(() => localStorage.setItem("chat-history", json))
+  
+  return json
+})
+
+// Restore from JSON
+const loadChat = Effect.gen(function*() {
+  const json = yield* Effect.sync(() => localStorage.getItem("chat-history"))
+  
+  if (!json) {
+    return yield* Chat.empty
+  }
+  
+  // Restore chat with full history
+  const chat = yield* Chat.fromJson(json)
+  
+  // Continue conversation
+  const response = yield* chat.generateText({
+    prompt: "Let's continue our discussion"
+  })
+  
+  return chat
+})
+```
+
+### Inspecting History
+
+Access the conversation history directly:
+
+```ts
+import { Effect, Ref } from "effect"
+import { Chat } from "effect/unstable/ai"
+
+const program = Effect.gen(function*() {
+  const chat = yield* Chat.empty
+  
+  yield* chat.generateText({ prompt: "Hello!" })
+  
+  // Get current history
+  const history = yield* Ref.get(chat.history)
+  
+  console.log("Messages:", history.content.length)
+  
+  for (const message of history.content) {
+    console.log(`${message.role}:`, message.content)
+  }
+  
+  // Manually modify history if needed
+  yield* Ref.update(chat.history, (h) => {
+    // Transform history
+    return h
+  })
+})
+```
+
+## Complete Example: Customer Support Agent
+
+Here's a complete example combining tools and chat:
+
+```ts
+import { Effect, Schema, Layer, Config } from "effect"
+import { Chat, Tool, Toolkit } from "effect/unstable/ai"
+import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai"
+import { FetchHttpClient } from "effect/unstable/http"
+
+const OpenAiClientLayer = OpenAiClient.layerConfig({
+  apiKey: Config.redacted("OPENAI_API_KEY")
+}).pipe(Layer.provide(FetchHttpClient.layer))
+
+// Define tools
+const tools = Toolkit.make(
+  Tool.make("GetCustomerInfo", {
+    description: "Get customer information by ID",
+    parameters: Schema.Struct({ customerId: Schema.String }),
+    success: Schema.Struct({
+      name: Schema.String,
+      email: Schema.String,
+      tier: Schema.Literals("free", "pro", "enterprise")
+    })
+  }),
+  Tool.make("GetOrderStatus", {
+    description: "Get order status by order ID",
+    parameters: Schema.Struct({ orderId: Schema.String }),
+    success: Schema.Struct({
+      status: Schema.Literals("pending", "shipped", "delivered"),
+      estimatedDelivery: Schema.String
+    })
+  }),
+  Tool.make("CreateTicket", {
+    description: "Create a support ticket",
+    parameters: Schema.Struct({
+      customerId: Schema.String,
+      issue: Schema.String,
+      priority: Schema.Literals("low", "medium", "high")
+    }),
+    success: Schema.Struct({ ticketId: Schema.String })
+  })
+)
+
+const toolsLayer = tools.toLayer(
+  Effect.gen(function*() {
+    return tools.of({
+      GetCustomerInfo: ({ customerId }) =>
+        Effect.succeed({
+          name: "John Doe",
+          email: "john@example.com",
+          tier: "pro" as const
+        }),
+      GetOrderStatus: ({ orderId }) =>
+        Effect.succeed({
+          status: "shipped" as const,
+          estimatedDelivery: "2024-03-15"
+        }),
+      CreateTicket: ({ customerId, issue, priority }) =>
+        Effect.succeed({ ticketId: `TKT-${Date.now()}` })
+    })
+  })
+)
+
+const supportAgent = Effect.gen(function*() {
+  const toolkit = yield* tools
+  const modelLayer = yield* OpenAiLanguageModel.model("gpt-4")
+  
+  const chat = yield* Chat.fromPrompt([
+    {
+      role: "system",
+      content:
+        "You are a helpful customer support agent. Use tools to look up customer " +
+        "information, check order status, and create support tickets when needed."
+    }
+  ])
+  
+  // Handle a customer inquiry
+  const response1 = yield* chat.generateText({
+    prompt: "Hi, I'm customer C123 and want to check my order O456",
+    toolkit
+  }).pipe(Effect.provide(modelLayer))
+  
+  console.log("Agent:", response1.text)
+  
+  // Continue conversation
+  const response2 = yield* chat.generateText({
+    prompt: "It's taking too long, can you help?",
+    toolkit
+  }).pipe(Effect.provide(modelLayer))
+  
+  console.log("Agent:", response2.text)
+})
+
+const runnable = supportAgent.pipe(
+  Effect.provide(toolsLayer),
+  Effect.provide(OpenAiClientLayer)
+)
+
+Effect.runPromise(runnable)
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Language Models" icon="robot" href="/ai/language-models">
+    Learn about text generation and structured output
+  </Card>
+  <Card title="AI Overview" icon="lightbulb" href="/ai/overview">
+    Understand the full AI framework architecture
+  </Card>
+</CardGroup>

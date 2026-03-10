@@ -1,0 +1,280 @@
+---
+title: "@effect/sql-mssql"
+description: "Microsoft SQL Server driver for Effect SQL"
+---
+
+## Overview
+
+`@effect/sql-mssql` provides a Microsoft SQL Server driver for Effect's SQL toolkit. It uses the `tedious` library and supports connection pooling, transactions, stored procedures, and SQL Server-specific features.
+
+## Installation
+
+<CodeGroup>
+
+```bash npm
+npm install @effect/sql-mssql
+```
+
+```bash pnpm
+pnpm add @effect/sql-mssql
+```
+
+```bash yarn
+yarn add @effect/sql-mssql
+```
+
+</CodeGroup>
+
+## Basic Usage
+
+### Creating a Client
+
+Use the `MssqlClient.layer` function to create a SQL Server client layer:
+
+```typescript
+import { MssqlClient } from "@effect/sql-mssql"
+import { Effect, Layer, Redacted } from "effect"
+
+const SqlLive = MssqlClient.layer({
+  server: "localhost",
+  port: 1433,
+  database: "mydb",
+  username: "sa",
+  password: Redacted.make("YourStrong@Passw0rd")
+})
+```
+
+### Executing Queries
+
+```typescript
+import { Effect } from "effect"
+import { SqlClient } from "effect/unstable/sql"
+
+const program = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient
+
+  // Simple query
+  const users = yield* sql<{ id: number; name: string }>`
+    SELECT id, name FROM users WHERE active = ${true}
+  `
+
+  // Insert with OUTPUT clause
+  const inserted = yield* sql<{ id: number }>`
+    INSERT INTO users ${sql.insert({ name: "Alice", email: "alice@example.com" }).returning("*")}
+  `
+
+  // Update with helper
+  yield* sql`
+    UPDATE users SET ${sql.update({ name: "Bob" })} WHERE id = ${1}
+  `
+})
+
+const runnable = program.pipe(Effect.provide(SqlLive))
+```
+
+## Configuration Options
+
+### Connection Options
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `server` | `string` | SQL Server hostname |
+| `port` | `number` | Database port (default: 1433) |
+| `database` | `string` | Database name |
+| `username` | `string` | Username for authentication |
+| `password` | `Redacted` | Password for authentication |
+| `domain` | `string` | Domain for Windows authentication |
+| `authType` | `string` | Authentication type (e.g., "ntlm", "azure-active-directory-password") |
+| `instanceName` | `string` | Named instance of SQL Server |
+| `encrypt` | `boolean` | Enable encryption (default: false) |
+| `trustServer` | `boolean` | Trust server certificate (default: true) |
+| `connectTimeout` | `Duration.Input` | Connection timeout (default: 5s) |
+
+### Connection Pool Options
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `minConnections` | `number` | Minimum number of connections (default: 1) |
+| `maxConnections` | `number` | Maximum number of connections (default: 10) |
+| `connectionTTL` | `Duration.Input` | Time-to-live for connections (default: 45 minutes) |
+
+### Transform Options
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `transformResultNames` | `(str: string) => string` | Transform column names in results |
+| `transformQueryNames` | `(str: string) => string` | Transform identifiers in queries |
+
+### Advanced Options
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `parameterTypes` | `Record<Statement.PrimitiveKind, DataType>` | Custom parameter type mapping |
+| `spanAttributes` | `Record<string, unknown>` | Custom telemetry attributes |
+
+## SQL Server-Specific Features
+
+### OUTPUT Clause
+
+SQL Server uses OUTPUT instead of RETURNING:
+
+```typescript
+const sql = yield* SqlClient.SqlClient
+
+// Insert with OUTPUT
+const inserted = yield* sql<{ id: number; name: string }>`
+  INSERT INTO users ${sql.insert({ name: "Alice" }).returning("*")}
+`
+
+// Update with OUTPUT
+const updated = yield* sql<{ id: number; name: string }>`
+  UPDATE users SET ${sql.update({ name: "Bob" }).returning("id", "name")}
+  WHERE id = ${1}
+`
+```
+
+### Custom Parameters
+
+Use typed parameters for SQL Server-specific types:
+
+```typescript
+import { MssqlTypes } from "@effect/sql-mssql"
+
+const sql = yield* MssqlClient.MssqlClient
+
+// Use a specific SQL Server type
+const result = yield* sql`
+  SELECT * FROM users WHERE id = ${sql.param(MssqlTypes.UniqueIdentifier, "6F9619FF-8B86-D011-B42D-00C04FC964FF")}
+`
+```
+
+### Stored Procedures
+
+Call stored procedures with input and output parameters:
+
+```typescript
+import { MssqlClient, Parameter, Procedure, MssqlTypes } from "@effect/sql-mssql"
+
+const sql = yield* MssqlClient.MssqlClient
+
+// Define procedure with parameters
+const getUserById = Procedure.make("GetUserById", {
+  input: {
+    userId: Parameter.make(MssqlTypes.Int)
+  },
+  output: {
+    userName: Parameter.make(MssqlTypes.NVarChar)
+  }
+})
+
+// Call the procedure
+const result = yield* sql.call(
+  getUserById.withValues({ userId: 123 })
+)
+
+console.log(result.params.userName) // Output parameter
+console.log(result.rows)             // Result set
+```
+
+### Transactions
+
+Automatic transaction management with savepoints:
+
+```typescript
+const sql = yield* SqlClient.SqlClient
+
+const result = yield* sql.withTransaction(
+  Effect.gen(function* () {
+    yield* sql`INSERT INTO accounts (balance) VALUES (${100})`
+    yield* sql`UPDATE accounts SET balance = balance - ${50} WHERE id = ${1}`
+    return yield* sql<{ balance: number }>`SELECT balance FROM accounts WHERE id = ${1}`
+  })
+)
+```
+
+## Parameter Type Mapping
+
+Customize how JavaScript types map to SQL Server types:
+
+```typescript
+import { MssqlTypes } from "@effect/sql-mssql"
+
+const SqlLive = MssqlClient.layer({
+  server: "localhost",
+  database: "mydb",
+  parameterTypes: {
+    string: MssqlTypes.NVarChar,
+    number: MssqlTypes.Float,
+    bigint: MssqlTypes.BigInt,
+    boolean: MssqlTypes.Bit,
+    Date: MssqlTypes.DateTime2,
+    Uint8Array: MssqlTypes.VarBinary,
+    Int8Array: MssqlTypes.VarBinary,
+    null: MssqlTypes.Null
+  }
+})
+```
+
+## Name Transformations
+
+Automatically convert between naming conventions:
+
+```typescript
+import { String } from "effect"
+
+const SqlLive = MssqlClient.layer({
+  server: "localhost",
+  database: "mydb",
+  // Transform camelCase to PascalCase for queries
+  transformQueryNames: (str) => str.charAt(0).toUpperCase() + str.slice(1),
+  // Transform PascalCase to camelCase for results
+  transformResultNames: (str) => str.charAt(0).toLowerCase() + str.slice(1)
+})
+```
+
+## Error Handling
+
+All SQL errors are wrapped in `SqlError`:
+
+```typescript
+import { SqlError } from "effect/unstable/sql"
+
+const program = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient
+  return yield* sql`SELECT * FROM users`
+}).pipe(
+  Effect.catchTag("SqlError", (error) =>
+    Effect.log(`Database error: ${error.message}`)
+  )
+)
+```
+
+## Windows Authentication
+
+Use Windows authentication:
+
+```typescript
+const SqlLive = MssqlClient.layer({
+  server: "localhost",
+  database: "mydb",
+  domain: "MYDOMAIN",
+  authType: "ntlm",
+  username: "myuser",
+  password: Redacted.make("password")
+})
+```
+
+## Type Safety
+
+The client is fully typed with Effect's type system:
+
+```typescript
+interface User {
+  id: number
+  name: string
+  email: string
+}
+
+const users = yield* sql<User>`SELECT * FROM users`
+// users: ReadonlyArray<User>
+```

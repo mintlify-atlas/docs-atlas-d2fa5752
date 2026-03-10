@@ -1,0 +1,463 @@
+---
+title: Language Models
+description: Generate text, structured output, and streams with Effect's LanguageModel interface
+---
+
+The `LanguageModel` module provides a unified interface for interacting with large language models. It supports text generation, structured output with schema validation, and streaming responses - all with full type safety and Effect integration.
+
+## Setting Up a Provider
+
+Before using `LanguageModel`, you need to configure a provider. Here's how to set up OpenAI:
+
+```ts
+import { Effect, Layer, Config } from "effect"
+import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai"
+import { FetchHttpClient } from "effect/unstable/http"
+
+// Create the client layer
+const OpenAiClientLayer = OpenAiClient.layerConfig({
+  apiKey: Config.redacted("OPENAI_API_KEY")
+}).pipe(Layer.provide(FetchHttpClient.layer))
+
+// Create a model layer
+const modelLayer = OpenAiLanguageModel.model("gpt-4")
+
+// Provide both layers to your program
+const program = Effect.gen(function*() {
+  // Your AI code here
+}).pipe(
+  Effect.provide(modelLayer),
+  Effect.provide(OpenAiClientLayer)
+)
+```
+
+For Anthropic:
+
+```ts
+import { AnthropicClient, AnthropicLanguageModel } from "@effect/ai-anthropic"
+
+const AnthropicClientLayer = AnthropicClient.layerConfig({
+  apiKey: Config.redacted("ANTHROPIC_API_KEY")
+}).pipe(Layer.provide(FetchHttpClient.layer))
+
+const modelLayer = AnthropicLanguageModel.model("claude-3-5-sonnet-latest")
+```
+
+## Text Generation
+
+Generate text using `LanguageModel.generateText`:
+
+```ts
+import { Effect } from "effect"
+import { LanguageModel } from "effect/unstable/ai"
+
+const generateText = Effect.gen(function*() {
+  const response = yield* LanguageModel.generateText({
+    prompt: "Explain quantum computing in simple terms"
+  })
+
+  console.log(response.text)
+  console.log("Finish reason:", response.finishReason)
+  console.log("Input tokens:", response.usage.inputTokens.total)
+  console.log("Output tokens:", response.usage.outputTokens.total)
+
+  return response
+})
+```
+
+### Response Content
+
+The `GenerateTextResponse` provides convenient accessors:
+
+```ts
+const response = yield* LanguageModel.generateText({
+  prompt: "Write a haiku about programming"
+})
+
+// Get all text parts concatenated
+const text: string = response.text
+
+// Access individual content parts
+const content: Array<Response.Part> = response.content
+
+// Get tool calls (if any)
+const toolCalls = response.toolCalls
+
+// Get tool results (if any)
+const toolResults = response.toolResults
+
+// Check why generation finished
+const finishReason: "stop" | "length" | "tool-calls" | "content-filter" | "error" | "unknown" 
+  = response.finishReason
+
+// Access token usage
+const usage = response.usage
+```
+
+### Complex Prompts
+
+Use the `Prompt` module for structured conversations:
+
+```ts
+import { Prompt } from "effect/unstable/ai"
+
+const response = yield* LanguageModel.generateText({
+  prompt: [
+    {
+      role: "system",
+      content: "You are a helpful assistant specialized in mathematics."
+    },
+    {
+      role: "user",
+      content: [{
+        type: "text",
+        text: "What is the derivative of x²?"
+      }]
+    }
+  ]
+})
+```
+
+You can also use `Prompt.make` to build prompts:
+
+```ts
+const systemPrompt = Prompt.make([{
+  role: "system",
+  content: "You are a coding assistant."
+}])
+
+const userPrompt = Prompt.make("Help me write a function")
+
+const combined = Prompt.concat(systemPrompt, userPrompt)
+
+const response = yield* LanguageModel.generateText({
+  prompt: combined
+})
+```
+
+## Structured Output
+
+Generate validated, type-safe objects using `generateObject`:
+
+```ts
+import { Schema } from "effect"
+import { LanguageModel } from "effect/unstable/ai"
+
+const ContactSchema = Schema.Struct({
+  name: Schema.String,
+  email: Schema.String.pipe(Schema.pattern(/.+@.+\..+/)),
+  phone: Schema.optional(Schema.String),
+  company: Schema.optional(Schema.String)
+})
+
+const extractContact = Effect.gen(function*() {
+  const response = yield* LanguageModel.generateObject({
+    prompt: "Extract contact info: John Doe, john@example.com, works at Acme Corp",
+    schema: ContactSchema,
+    objectName: "contact" // Optional: helps the model understand what to generate
+  })
+
+  // Type is automatically inferred from schema
+  const contact: {
+    name: string
+    email: string
+    phone?: string
+    company?: string
+  } = response.value
+
+  console.log(contact)
+  // { name: "John Doe", email: "john@example.com", company: "Acme Corp" }
+
+  return contact
+})
+```
+
+### Complex Schemas
+
+You can use any Effect Schema:
+
+```ts
+const LaunchPlanSchema = Schema.Struct({
+  launchDate: Schema.DateFromString,
+  audience: Schema.Array(Schema.String),
+  channels: Schema.Array(Schema.Literals(
+    "email",
+    "blog",
+    "social-media",
+    "press-release"
+  )),
+  summary: Schema.String.pipe(
+    Schema.maxLength(500)
+  ),
+  keyRisks: Schema.Array(Schema.Struct({
+    risk: Schema.String,
+    mitigation: Schema.String
+  }))
+})
+
+const response = yield* LanguageModel.generateObject({
+  prompt: "Create a launch plan for our new AI product...",
+  schema: LaunchPlanSchema,
+  objectName: "launch_plan"
+})
+
+// response.value is fully typed and validated
+const plan = response.value
+console.log(plan.launchDate) // Date object
+console.log(plan.channels) // Array of specific strings
+```
+
+### Handling Schema Errors
+
+If the model generates invalid output:
+
+```ts
+import { AiError } from "effect/unstable/ai"
+
+const result = yield* LanguageModel.generateObject({
+  prompt: "Extract: not a valid contact",
+  schema: ContactSchema
+}).pipe(
+  Effect.catchTag("AiError", (error) => {
+    if (error.reason._tag === "InvalidOutputError") {
+      console.log("Model generated invalid output:", error.reason.description)
+      // Retry with a more specific prompt or use a fallback
+    }
+    return Effect.fail(error)
+  })
+)
+```
+
+## Streaming
+
+Stream responses as they're generated:
+
+```ts
+import { Effect, Stream } from "effect"
+import { LanguageModel, type Response } from "effect/unstable/ai"
+
+const streamText = Effect.gen(function*() {
+  const stream = LanguageModel.streamText({
+    prompt: "Write a short story about a space explorer"
+  })
+
+  // Process text deltas as they arrive
+  yield* Stream.runForEach(stream, (part) => {
+    if (part.type === "text-delta") {
+      return Effect.sync(() => process.stdout.write(part.delta))
+    }
+    return Effect.void
+  })
+})
+```
+
+### Stream Part Types
+
+Streams emit different part types:
+
+```ts
+const stream = LanguageModel.streamText({
+  prompt: "Explain photosynthesis"
+})
+
+yield* Stream.runForEach(stream, (part) => {
+  switch (part.type) {
+    case "text-delta":
+      // Incremental text as it's generated
+      console.log("Text:", part.delta)
+      break
+    
+    case "tool-call":
+      // Model is calling a tool
+      console.log("Tool call:", part.name, part.params)
+      break
+    
+    case "tool-result":
+      // Tool execution completed
+      console.log("Tool result:", part.result)
+      break
+    
+    case "finish":
+      // Generation complete
+      console.log("Finished:", part.reason)
+      console.log("Usage:", part.usage)
+      break
+  }
+  
+  return Effect.void
+})
+```
+
+### Collecting Stream Results
+
+Collect all parts into an array:
+
+```ts
+const parts = yield* LanguageModel.streamText({
+  prompt: "List 5 programming languages"
+}).pipe(
+  Stream.runCollect
+)
+
+// Extract all text deltas
+const text = parts.filter(
+  (part): part is Response.TextDeltaPart => part.type === "text-delta"
+).map(part => part.delta).join("")
+
+console.log(text)
+```
+
+## Multi-Provider Strategies
+
+Use `ExecutionPlan` to try multiple providers with fallback:
+
+```ts
+import { Effect, ExecutionPlan } from "effect"
+import { OpenAiLanguageModel } from "@effect/ai-openai"
+import { AnthropicLanguageModel } from "@effect/ai-anthropic"
+import { LanguageModel } from "effect/unstable/ai"
+
+// Try a cheaper model first, fall back to more expensive
+const plan = ExecutionPlan.make(
+  {
+    provide: OpenAiLanguageModel.model("gpt-4o-mini"),
+    attempts: 3
+  },
+  {
+    provide: AnthropicLanguageModel.model("claude-3-5-sonnet-latest"),
+    attempts: 2
+  }
+)
+
+const resilientGeneration = Effect.gen(function*() {
+  const response = yield* LanguageModel.generateText({
+    prompt: "Summarize this document..."
+  })
+  
+  const provider = yield* Model.ProviderName
+  console.log(`Succeeded with provider: ${provider}`)
+  
+  return response
+}).pipe(
+  Effect.withExecutionPlan(plan)
+)
+```
+
+## Working with Service Layers
+
+Create reusable AI services:
+
+```ts
+import { Effect, Layer, Schema, ServiceMap } from "effect"
+import { LanguageModel, Model } from "effect/unstable/ai"
+
+class AiWriterError extends Schema.TaggedErrorClass<AiWriterError>()()
+  ("AiWriterError", {
+    reason: AiError.AiErrorReason
+  }) {}
+
+class AiWriter extends ServiceMap.Service<AiWriter, {
+  draftAnnouncement(product: string): Effect.Effect<string, AiWriterError>
+  summarize(text: string): Effect.Effect<string, AiWriterError>
+}>()(
+  "myapp/AiWriter"
+) {
+  static readonly layer = Layer.effect(
+    AiWriter,
+    Effect.gen(function*() {
+      const model = yield* OpenAiLanguageModel.model("gpt-4")
+      
+      const draftAnnouncement = Effect.fn("AiWriter.draftAnnouncement")(
+        function*(product: string) {
+          const response = yield* LanguageModel.generateText({
+            prompt: `Write a launch announcement for ${product}`
+          })
+          return response.text
+        },
+        Effect.provide(model),
+        Effect.mapError(error => new AiWriterError({ reason: error.reason }))
+      )
+      
+      const summarize = Effect.fn("AiWriter.summarize")(
+        function*(text: string) {
+          const response = yield* LanguageModel.generateText({
+            prompt: `Summarize: ${text}`
+          })
+          return response.text
+        },
+        Effect.provide(model),
+        Effect.mapError(error => new AiWriterError({ reason: error.reason }))
+      )
+      
+      return AiWriter.of({
+        draftAnnouncement,
+        summarize
+      })
+    })
+  ).pipe(
+    Layer.provide(OpenAiClientLayer)
+  )
+}
+
+// Use the service
+const program = Effect.gen(function*() {
+  const writer = yield* AiWriter
+  const announcement = yield* writer.draftAnnouncement("Effect v4")
+  console.log(announcement)
+})
+
+Effect.runPromise(
+  program.pipe(Effect.provide(AiWriter.layer))
+)
+```
+
+## API Reference
+
+### `generateText`
+
+```ts
+LanguageModel.generateText(options: {
+  prompt: Prompt.RawInput
+  toolkit?: Toolkit.WithHandler<Tools>
+  toolChoice?: "auto" | "none" | "required" | { tool: string }
+  concurrency?: Concurrency
+  disableToolCallResolution?: boolean
+}): Effect.Effect<GenerateTextResponse, AiError, LanguageModel>
+```
+
+### `generateObject`
+
+```ts
+LanguageModel.generateObject(options: {
+  prompt: Prompt.RawInput
+  schema: Schema.Top
+  objectName?: string
+  toolkit?: Toolkit.WithHandler<Tools>
+  toolChoice?: "auto" | "none" | "required" | { tool: string }
+  concurrency?: Concurrency
+  disableToolCallResolution?: boolean
+}): Effect.Effect<GenerateObjectResponse, AiError, LanguageModel>
+```
+
+### `streamText`
+
+```ts
+LanguageModel.streamText(options: {
+  prompt: Prompt.RawInput
+  toolkit?: Toolkit.WithHandler<Tools>
+  toolChoice?: "auto" | "none" | "required" | { tool: string }
+  concurrency?: Concurrency
+  disableToolCallResolution?: boolean
+}): Stream.Stream<Response.StreamPart, AiError, LanguageModel>
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Tools & Chat" icon="wrench" href="/ai/tools-chat">
+    Learn about tool calling and stateful conversations
+  </Card>
+  <Card title="Error Handling" icon="triangle-exclamation" href="/ai/overview#error-handling">
+    Handle AI errors with semantic error types
+  </Card>
+</CardGroup>

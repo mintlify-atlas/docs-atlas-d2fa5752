@@ -1,0 +1,350 @@
+---
+title: "HTTP Client"
+description: "Make HTTP requests with Effect's powerful client library"
+---
+
+The `HttpClient` module provides a functional, composable API for making HTTP requests. It supports middleware, retries, rate limiting, and seamless integration with Effect's error handling.
+
+## Overview
+
+`HttpClient` is designed to be:
+
+- **Composable**: Chain transformations and middleware using pipes
+- **Type-safe**: Full TypeScript support with precise error types
+- **Resilient**: Built-in retry logic and error handling
+- **Testable**: Easy to mock and test with dependency injection
+
+## Basic Usage
+
+### Making Requests
+
+The client provides convenience methods for common HTTP methods:
+
+```typescript
+import { HttpClient } from "effect/unstable/http"
+import { Effect } from "effect"
+
+const program = Effect.gen(function* () {
+  const client = yield* HttpClient.HttpClient
+  
+  // GET request
+  const response = yield* client.get("https://api.example.com/users")
+  
+  // POST request with options
+  const created = yield* client.post("https://api.example.com/users", {
+    body: HttpBody.json({ name: "Alice", email: "alice@example.com" })
+  })
+})
+```
+
+### Processing Responses
+
+Use `HttpClientResponse` helpers to decode response bodies:
+
+```typescript
+import { HttpClient, HttpClientResponse } from "effect/unstable/http"
+import { Effect, Schema } from "effect"
+
+class User extends Schema.Class<User>("User")({
+  id: Schema.Number,
+  name: Schema.String,
+  email: Schema.String
+}) {}
+
+const getUser = (id: number) =>
+  HttpClient.get(`https://api.example.com/users/${id}`).pipe(
+    Effect.flatMap(HttpClientResponse.schemaBodyJson(User))
+  )
+```
+
+## Client Configuration
+
+### Base URL and Headers
+
+Apply common settings to all requests:
+
+```typescript
+import { HttpClient, HttpClientRequest } from "effect/unstable/http"
+import { flow } from "effect"
+
+const client = HttpClient.HttpClient.pipe(
+  HttpClient.mapRequest(flow(
+    HttpClientRequest.prependUrl("https://api.example.com"),
+    HttpClientRequest.setHeader("Authorization", "Bearer token"),
+    HttpClientRequest.acceptJson
+  ))
+)
+```
+
+### Filtering Responses
+
+Ensure successful status codes:
+
+```typescript
+const client = HttpClient.HttpClient.pipe(
+  HttpClient.filterStatusOk  // Only accept 2xx responses
+)
+
+// Custom status filtering
+const clientWith404 = HttpClient.HttpClient.pipe(
+  HttpClient.filterStatus(status => status === 200 || status === 404)
+)
+```
+
+## Error Handling
+
+### Retry Logic
+
+Automatically retry transient failures:
+
+```typescript
+import { HttpClient, Schedule } from "effect"
+
+const resilientClient = HttpClient.HttpClient.pipe(
+  HttpClient.filterStatusOk,
+  HttpClient.retryTransient({
+    schedule: Schedule.exponential(100),
+    times: 3
+  })
+)
+```
+
+The `retryTransient` method automatically retries:
+- Network errors
+- Timeout errors
+- 5xx server errors
+- 429 rate limit errors
+
+### Error Recovery
+
+Handle specific error types:
+
+```typescript
+const client = HttpClient.HttpClient.pipe(
+  HttpClient.catchTag("StatusCodeError", (error) =>
+    Effect.succeed(HttpClientResponse.empty({ status: 200 }))
+  )
+)
+```
+
+## Rate Limiting
+
+Protect APIs with built-in rate limiting:
+
+```typescript
+import { HttpClient } from "effect/unstable/http"
+import { RateLimiter } from "effect/unstable/persistence"
+
+const rateLimitedClient = HttpClient.HttpClient.pipe(
+  HttpClient.withRateLimiter({
+    limiter: RateLimiter.RateLimiter,
+    window: "1 minute",
+    limit: 60,
+    key: "api-key",
+    algorithm: "token-bucket"
+  })
+)
+```
+
+The rate limiter:
+- Automatically reads rate limit headers from responses
+- Respects `Retry-After` headers
+- Supports per-endpoint or per-user limits
+- Handles 429 responses automatically
+
+## Middleware
+
+### Request Transformation
+
+Transform requests before sending:
+
+```typescript
+const client = HttpClient.HttpClient.pipe(
+  HttpClient.mapRequest((request) =>
+    HttpClientRequest.setHeader(request, "X-Request-ID", crypto.randomUUID())
+  )
+)
+```
+
+### Response Transformation
+
+Process all responses:
+
+```typescript
+const client = HttpClient.HttpClient.pipe(
+  HttpClient.tap((response) =>
+    Effect.log(`Request completed: ${response.status}`)
+  )
+)
+```
+
+## Cookie Management
+
+Manage cookies across requests:
+
+```typescript
+import { HttpClient, Cookies } from "effect/unstable/http"
+import { Ref } from "effect"
+
+const program = Effect.gen(function* () {
+  const cookieRef = yield* Ref.make(Cookies.empty)
+  
+  const client = HttpClient.HttpClient.pipe(
+    HttpClient.withCookiesRef(cookieRef)
+  )
+  
+  // Cookies are automatically sent and stored
+  yield* client.get("https://api.example.com/login")
+  yield* client.get("https://api.example.com/profile")
+})
+```
+
+## Real-World Example
+
+Here's a complete service using `HttpClient`:
+
+```typescript
+import { Effect, Layer, Schedule, Schema, ServiceMap } from "effect"
+import { 
+  FetchHttpClient, 
+  HttpClient, 
+  HttpClientRequest, 
+  HttpClientResponse 
+} from "effect/unstable/http"
+import { flow } from "effect"
+
+class Todo extends Schema.Class<Todo>("Todo")({
+  userId: Schema.Number,
+  id: Schema.Number,
+  title: Schema.String,
+  completed: Schema.Boolean
+}) {}
+
+export class JsonPlaceholder extends ServiceMap.Service<JsonPlaceholder, {
+  readonly allTodos: Effect.Effect<ReadonlyArray<Todo>, JsonPlaceholderError>
+  getTodo(id: number): Effect.Effect<Todo, JsonPlaceholderError>
+  createTodo(todo: Omit<Todo, "id">): Effect.Effect<Todo, JsonPlaceholderError>
+}>()("app/JsonPlaceholder") {
+  static readonly layer = Layer.effect(
+    JsonPlaceholder,
+    Effect.gen(function*() {
+      // Configure client with common middleware
+      const client = (yield* HttpClient.HttpClient).pipe(
+        HttpClient.mapRequest(flow(
+          HttpClientRequest.prependUrl("https://jsonplaceholder.typicode.com"),
+          HttpClientRequest.acceptJson
+        )),
+        HttpClient.filterStatusOk,
+        HttpClient.retryTransient({
+          schedule: Schedule.exponential(100),
+          times: 3
+        })
+      )
+
+      const allTodos = client.get("/todos").pipe(
+        Effect.flatMap(HttpClientResponse.schemaBodyJson(Schema.Array(Todo))),
+        Effect.mapError((cause) => new JsonPlaceholderError({ cause })),
+        Effect.withSpan("JsonPlaceholder.allTodos")
+      )
+
+      const getTodo = Effect.fn("JsonPlaceholder.getTodo")(function*(id: number) {
+        yield* Effect.annotateCurrentSpan({ id })
+        
+        const todo = yield* client.get(`/todos/${id}`, {
+          urlParams: { format: "json" }
+        }).pipe(
+          Effect.flatMap(HttpClientResponse.schemaBodyJson(Todo)),
+          Effect.mapError((cause) => new JsonPlaceholderError({ cause }))
+        )
+        
+        return todo
+      })
+
+      const createTodo = Effect.fn("JsonPlaceholder.createTodo")(function*(todo: Omit<Todo, "id">) {
+        yield* Effect.annotateCurrentSpan({ title: todo.title })
+        
+        const createdTodo = yield* HttpClientRequest.post("/todos").pipe(
+          HttpClientRequest.setUrlParams({ format: "json" }),
+          HttpClientRequest.bodyJsonUnsafe(todo),
+          client.execute,
+          Effect.flatMap(HttpClientResponse.schemaBodyJson(Todo)),
+          Effect.mapError((cause) => new JsonPlaceholderError({ cause }))
+        )
+        
+        return createdTodo
+      })
+
+      return JsonPlaceholder.of({
+        allTodos,
+        getTodo,
+        createTodo
+      })
+    })
+  ).pipe(
+    Layer.provide(FetchHttpClient.layer)
+  )
+}
+
+export class JsonPlaceholderError extends Schema.TaggedErrorClass<JsonPlaceholderError>()("JsonPlaceholderError", {
+  cause: Schema.Defect
+}) {}
+```
+
+## Testing
+
+Create test clients easily:
+
+```typescript
+import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
+import { Effect } from "effect"
+
+const mockClient = HttpClient.make((request, url, signal, fiber) =>
+  Effect.succeed(
+    HttpClientResponse.fromWeb(
+      request,
+      new Response(JSON.stringify({ id: 1, name: "Test" }))
+    )
+  )
+)
+
+const testLayer = Layer.succeed(HttpClient.HttpClient, mockClient)
+```
+
+## API Reference
+
+### Core Methods
+
+- `get(url, options?)` - Make a GET request
+- `post(url, options?)` - Make a POST request
+- `put(url, options?)` - Make a PUT request
+- `patch(url, options?)` - Make a PATCH request
+- `del(url, options?)` - Make a DELETE request
+- `head(url, options?)` - Make a HEAD request
+- `options(url, options?)` - Make an OPTIONS request
+- `execute(request)` - Execute a custom request
+
+### Transformations
+
+- `mapRequest(fn)` - Transform requests
+- `mapRequestEffect(fn)` - Transform requests with effects
+- `transformResponse(fn)` - Transform responses
+- `tap(fn)` - Side effect on success
+- `tapError(fn)` - Side effect on error
+
+### Error Handling
+
+- `catch(fn)` - Catch all errors
+- `catchTag(tag, fn)` - Catch specific error types
+- `retry(policy)` - Retry with custom policy
+- `retryTransient(options)` - Retry transient errors
+
+### Filters
+
+- `filterStatus(fn)` - Filter by status code
+- `filterStatusOk` - Only accept 2xx responses
+- `filterOrElse(predicate, fn)` - Filter with fallback
+
+## See Also
+
+- [HTTP Server](/http/server) - Build HTTP servers
+- [HTTP API](/http/api) - Schema-first API development

@@ -1,0 +1,454 @@
+---
+title: "HTTP Server"
+description: "Build production-ready HTTP servers with Effect"
+---
+
+The `HttpServer` module provides infrastructure for serving HTTP applications built with Effect. It integrates with `HttpRouter` to handle requests and supports multiple runtime environments.
+
+## Overview
+
+`HttpServer` offers:
+
+- **Platform-agnostic**: Works with Node.js, Bun, and serverless environments
+- **Type-safe routing**: Full TypeScript integration
+- **Middleware support**: Composable request/response processing
+- **Effect integration**: Leverage Effect's error handling and resource management
+
+## Basic Server
+
+### Creating a Server
+
+```typescript
+import { NodeHttpServer, NodeRuntime } from "@effect/platform-node"
+import { Effect, Layer } from "effect"
+import { HttpRouter, HttpServer, HttpServerResponse } from "effect/unstable/http"
+import { createServer } from "node:http"
+
+// Define routes
+const router = HttpRouter.empty.pipe(
+  HttpRouter.get("/", Effect.succeed(HttpServerResponse.text("Hello, World!"))),
+  HttpRouter.get("/health", Effect.succeed(HttpServerResponse.empty({ status: 200 })))
+)
+
+// Create server layer
+const ServerLayer = HttpRouter.serve(router).pipe(
+  Layer.provide(NodeHttpServer.layer(createServer, { port: 3000 }))
+)
+
+// Run the server
+Layer.launch(ServerLayer).pipe(
+  NodeRuntime.runMain
+)
+```
+
+### Server Address
+
+Access and log the server address:
+
+```typescript
+import { HttpServer } from "effect/unstable/http"
+import { Effect } from "effect"
+
+const logAddress = HttpServer.logAddress
+
+const ServerLayer = HttpRouter.serve(router).pipe(
+  HttpServer.withLogAddress,
+  Layer.provide(NodeHttpServer.layer(createServer, { port: 3000 }))
+)
+```
+
+## Routing
+
+### Route Handlers
+
+Define routes with `HttpRouter`:
+
+```typescript
+import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
+import { Effect, Schema } from "effect"
+
+const router = HttpRouter.empty.pipe(
+  // Simple text response
+  HttpRouter.get("/", 
+    Effect.succeed(HttpServerResponse.text("Welcome"))
+  ),
+  
+  // JSON response
+  HttpRouter.get("/api/status",
+    Effect.succeed(HttpServerResponse.json({ status: "ok" }))
+  ),
+  
+  // Access request
+  HttpRouter.post("/api/echo",
+    Effect.gen(function*() {
+      const request = yield* HttpServerRequest.HttpServerRequest
+      const body = yield* request.json
+      return HttpServerResponse.json(body)
+    })
+  ),
+  
+  // Path parameters
+  HttpRouter.get("/users/:id",
+    Effect.gen(function*() {
+      const { params } = yield* HttpRouter.RouteContext
+      return HttpServerResponse.json({ userId: params.id })
+    })
+  )
+)
+```
+
+### Route Groups
+
+Organize routes with prefixes:
+
+```typescript
+const apiRoutes = HttpRouter.empty.pipe(
+  HttpRouter.get("/users", getUsersHandler),
+  HttpRouter.post("/users", createUserHandler),
+  HttpRouter.get("/users/:id", getUserHandler)
+)
+
+const router = HttpRouter.empty.pipe(
+  HttpRouter.mount("/api/v1", apiRoutes)
+)
+```
+
+## Request Handling
+
+### Accessing Request Data
+
+```typescript
+import { HttpServerRequest } from "effect/unstable/http"
+import { Effect } from "effect"
+
+const handler = Effect.gen(function*() {
+  const request = yield* HttpServerRequest.HttpServerRequest
+  
+  // Headers
+  const authHeader = request.headers.authorization
+  
+  // Query parameters
+  const query = yield* HttpServerRequest.ParsedSearchParams
+  
+  // JSON body
+  const body = yield* request.json
+  
+  // Form data
+  const formData = yield* request.formData
+  
+  // Multipart data
+  const multipart = yield* request.multipart
+  
+  return HttpServerResponse.json({ received: true })
+})
+```
+
+### Schema Validation
+
+Validate request data with schemas:
+
+```typescript
+import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
+import { Effect, Schema } from "effect"
+
+const CreateUserSchema = Schema.Struct({
+  name: Schema.String,
+  email: Schema.String.pipe(Schema.filter(v => v.includes("@")))
+})
+
+const createUser = Effect.gen(function*() {
+  const body = yield* HttpServerRequest.schemaBodyJson(CreateUserSchema)
+  
+  // body is now typed and validated
+  console.log(body.name, body.email)
+  
+  return HttpServerResponse.json({ id: 1, ...body })
+})
+```
+
+## Response Types
+
+### Common Responses
+
+```typescript
+import { HttpServerResponse } from "effect/unstable/http"
+
+// Text
+HttpServerResponse.text("Hello")
+
+// JSON
+HttpServerResponse.json({ message: "Success" })
+
+// Empty (for 204, etc.)
+HttpServerResponse.empty({ status: 204 })
+
+// HTML
+HttpServerResponse.html("<h1>Welcome</h1>")
+
+// Binary data
+HttpServerResponse.uint8Array(data)
+
+// File
+HttpServerResponse.file(path)
+
+// Stream
+HttpServerResponse.stream(stream)
+```
+
+### Setting Headers and Status
+
+```typescript
+import { HttpServerResponse } from "effect/unstable/http"
+
+const response = HttpServerResponse.json({ data: "value" }).pipe(
+  HttpServerResponse.setStatus(201),
+  HttpServerResponse.setHeader("X-Custom", "value"),
+  HttpServerResponse.setCookie("session", "abc123", {
+    httpOnly: true,
+    secure: true
+  })
+)
+```
+
+## Error Handling
+
+### Global Error Handler
+
+```typescript
+import { HttpRouter, HttpServerResponse } from "effect/unstable/http"
+import { Effect } from "effect"
+
+const router = HttpRouter.empty.pipe(
+  HttpRouter.get("/", riskyHandler),
+  HttpRouter.catchAll((error) =>
+    Effect.succeed(
+      HttpServerResponse.json(
+        { error: error.message },
+        { status: 500 }
+      )
+    )
+  )
+)
+```
+
+### Typed Errors
+
+```typescript
+import { Schema } from "effect"
+
+class UserNotFound extends Schema.TaggedErrorClass<UserNotFound>()("UserNotFound", {
+  userId: Schema.String
+}) {}
+
+const getUser = (id: string) =>
+  Effect.gen(function*() {
+    const user = yield* findUser(id)
+    if (!user) {
+      return yield* Effect.fail(new UserNotFound({ userId: id }))
+    }
+    return HttpServerResponse.json(user)
+  }).pipe(
+    Effect.catchTag("UserNotFound", (error) =>
+      Effect.succeed(
+        HttpServerResponse.json(
+          { error: "User not found", userId: error.userId },
+          { status: 404 }
+        )
+      )
+    )
+  )
+```
+
+## Middleware
+
+### Request Middleware
+
+```typescript
+import { HttpRouter, HttpServerRequest, HttpMiddleware } from "effect/unstable/http"
+import { Effect } from "effect"
+
+const loggingMiddleware = HttpMiddleware.make((app) =>
+  Effect.gen(function*() {
+    const request = yield* HttpServerRequest.HttpServerRequest
+    yield* Effect.log(`${request.method} ${request.url}`)
+    return yield* app
+  })
+)
+
+const router = HttpRouter.empty.pipe(
+  HttpRouter.get("/", handler),
+  HttpRouter.use(loggingMiddleware)
+)
+```
+
+### Authentication Middleware
+
+```typescript
+import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
+import { Effect } from "effect"
+
+const authMiddleware = HttpMiddleware.make((app) =>
+  Effect.gen(function*() {
+    const request = yield* HttpServerRequest.HttpServerRequest
+    const token = request.headers.authorization?.replace("Bearer ", "")
+    
+    if (!token) {
+      return HttpServerResponse.json(
+        { error: "Unauthorized" },
+        { status: 401 }
+      )
+    }
+    
+    // Validate token and provide user context
+    const user = yield* validateToken(token)
+    yield* Effect.provideService(app, User, user)
+  })
+)
+```
+
+## Platform Support
+
+### Node.js
+
+```typescript
+import { NodeHttpServer } from "@effect/platform-node"
+import { createServer } from "node:http"
+
+const ServerLayer = HttpRouter.serve(router).pipe(
+  Layer.provide(NodeHttpServer.layer(createServer, { port: 3000 }))
+)
+```
+
+### Bun
+
+```typescript
+import { BunHttpServer } from "@effect/platform-bun"
+
+const ServerLayer = HttpRouter.serve(router).pipe(
+  Layer.provide(BunHttpServer.layer({ port: 3000 }))
+)
+```
+
+### Serverless / Web Handler
+
+```typescript
+import { HttpRouter, HttpServer } from "effect/unstable/http"
+
+const routes = HttpRouter.empty.pipe(
+  HttpRouter.get("/", handler)
+)
+
+export const { handler, dispose } = HttpRouter.toWebHandler(
+  routes.pipe(
+    Layer.provide(HttpServer.layerServices)
+  )
+)
+```
+
+## Testing
+
+### Test Client
+
+Create a test client for your server:
+
+```typescript
+import { HttpServer, HttpClient } from "effect/unstable/http"
+import { Effect } from "effect"
+
+const testClient = Effect.gen(function*() {
+  const client = yield* HttpServer.makeTestClient
+  
+  // Client automatically connects to your server
+  const response = yield* client.get("/api/users")
+  const users = yield* response.json
+  
+  return users
+})
+```
+
+## Real-World Example
+
+Complete server with routing, validation, and error handling:
+
+```typescript
+import { NodeHttpServer, NodeRuntime } from "@effect/platform-node"
+import { Effect, Layer, Schema } from "effect"
+import { 
+  HttpRouter, 
+  HttpServer, 
+  HttpServerRequest, 
+  HttpServerResponse 
+} from "effect/unstable/http"
+import { createServer } from "node:http"
+
+// Domain models
+class User extends Schema.Class<User>("User")({
+  id: Schema.Number,
+  name: Schema.String,
+  email: Schema.String
+}) {}
+
+const CreateUserInput = Schema.Struct({
+  name: Schema.String,
+  email: Schema.String
+})
+
+// Handlers
+const getUsers = Effect.succeed(
+  HttpServerResponse.json([
+    { id: 1, name: "Alice", email: "alice@example.com" },
+    { id: 2, name: "Bob", email: "bob@example.com" }
+  ])
+)
+
+const createUser = Effect.gen(function*() {
+  const input = yield* HttpServerRequest.schemaBodyJson(CreateUserInput)
+  const user = { id: Date.now(), ...input }
+  return HttpServerResponse.json(user, { status: 201 })
+})
+
+const getUserById = Effect.gen(function*() {
+  const { params } = yield* HttpRouter.RouteContext
+  const id = parseInt(params.id)
+  
+  // Simulate database lookup
+  if (id === 1) {
+    return HttpServerResponse.json({
+      id: 1,
+      name: "Alice",
+      email: "alice@example.com"
+    })
+  }
+  
+  return HttpServerResponse.json(
+    { error: "User not found" },
+    { status: 404 }
+  )
+})
+
+// Routes
+const router = HttpRouter.empty.pipe(
+  HttpRouter.get("/health", 
+    Effect.succeed(HttpServerResponse.empty({ status: 200 }))
+  ),
+  HttpRouter.get("/api/users", getUsers),
+  HttpRouter.post("/api/users", createUser),
+  HttpRouter.get("/api/users/:id", getUserById)
+)
+
+// Server
+const ServerLayer = HttpRouter.serve(router).pipe(
+  HttpServer.withLogAddress,
+  Layer.provide(NodeHttpServer.layer(createServer, { port: 3000 }))
+)
+
+Layer.launch(ServerLayer).pipe(
+  Effect.tap(() => Effect.log("Server started on http://localhost:3000")),
+  NodeRuntime.runMain
+)
+```
+
+## See Also
+
+- [HTTP Client](/http/client) - Make HTTP requests
+- [HTTP API](/http/api) - Schema-first API development
